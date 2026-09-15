@@ -1,0 +1,31 @@
+{% extends "base.html" %}
+{% block title %}Backup{% endblock %}
+{% block content %}
+<h2>Backup y restauración</h2>
+
+<div class="device-card" style="max-width:520px;">
+  <h3>Estado actual de la base</h3>
+  <dl class="meta">
+    <dt>Dispositivos</dt><dd>{{ counts.devices }}</dd>
+    <dt>Empleados</dt><dd>{{ counts.employees }}</dd>
+    <dt>Vínculos empleado↔dispositivo</dt><dd>{{ counts.employee_map }}</dd>
+    <dt>Marcaciones</dt><dd>{{ counts.attendance_log }}</dd>
+    <dt>Cuentas del panel</dt><dd>{{ counts.users }}</dd>
+  </dl>
+  <a class="btn" href="{{ url_for('backup_export') }}">Descargar backup (.json)</a>
+  <p class="muted">Incluye las contraseñas (hash) de las cuentas del panel — trátalo como información sensible, igual que una credencial de base de datos.</p>
+</div>
+
+<div class="device-card" style="max-width:520px; margin-top:16px;">
+  <h3>Restaurar desde un backup</h3>
+  <p class="muted" style="color:#991b1b;">Esto <strong>reemplaza por completo</strong> los dispositivos, empleados, marcaciones y cuentas actuales por los del archivo. No se puede deshacer. Si algo sale mal a mitad de camino, no se aplica ningún cambio (todo o nada).</p>
+  <form method="post" action="{{ url_for('backup_import') }}" enctype="multipart/form-data"
+        onsubmit="return confirm('Esto borra y reemplaza TODA la base actual con el contenido del archivo. ¿Confirmas?');">
+    <input type="file" name="backup_file" accept="application/json" required style="margin-bottom:10px;">
+    <label style="flex-direction: row; align-items: center; gap: 8px; display:flex; margin-bottom:10px;">
+      <input type="checkbox" name="confirm" required style="width:auto;"> Entiendo que esto reemplaza todos los datos actuales
+    </label>
+    <button type="submit" class="btn danger">Restaurar backup</button>
+  </form>
+</div>
+{% endblock %}

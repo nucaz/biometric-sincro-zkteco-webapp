@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Seguridad{% endblock %}
+{% block content %}
+<h2>Seguridad de mi cuenta</h2>
+
+<div class="device-card" style="max-width:520px;">
+  <h3>Verificación en dos pasos (2FA)</h3>
+  {% if user.totp_enabled %}
+  <p><span class="badge" style="background:#dcfce7; color:#166534;">Activado</span></p>
+  <p class="muted">Si pierdes acceso a tu app autenticadora, pide a un super administrador que te lo resetee desde Cuentas.</p>
+  <form method="post" action="{{ url_for('disable_2fa') }}" onsubmit="return confirm('¿Desactivar el 2FA de tu cuenta?');" style="display:flex; gap:8px; align-items:end;">
+    <label style="display:flex; flex-direction:column; font-size:13px; gap:4px;">Confirma tu contraseña
+      <input type="password" name="password" required>
+    </label>
+    <button type="submit" class="btn danger">Desactivar 2FA</button>
+  </form>
+  {% else %}
+  <p><span class="badge warn">Desactivado</span></p>
+  <p class="muted">Actívalo para que tu cuenta pida un código de tu teléfono además de la contraseña.</p>
+  <a class="btn" href="{{ url_for('setup_2fa') }}">Activar 2FA</a>
+  {% endif %}
+</div>
+
+<div class="device-card" style="max-width:520px; margin-top:16px;">
+  <h3>Equipos recordados</h3>
+  <p class="muted">Estos equipos no piden el código de 2FA por 30 días desde que lo verificaste ahí.</p>
+  <table>
+    <thead><tr><th>Agregado</th><th>Expira</th><th></th></tr></thead>
+    <tbody>
+      {% for t in trusted %}
+      <tr>
+        <td>{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+        <td>{{ t.expires_at.strftime('%Y-%m-%d') }}</td>
+        <td>
+          <form method="post" action="{{ url_for('revoke_trusted_device', trusted_id=t.id) }}">
+            <button type="submit" class="btn secondary">Olvidar</button>
+          </form>
+        </td>
+      </tr>
+      {% else %}
+      <tr><td colspan="3" class="muted">Ninguno todavía.</td></tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endblock %}

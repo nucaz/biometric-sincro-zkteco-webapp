@@ -1,0 +1,52 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar dispositivo' if device else 'Nuevo dispositivo' }}{% endblock %}
+{% block content %}
+<h2>{{ 'Editar dispositivo' if device else 'Nuevo dispositivo' }}</h2>
+<form class="card" method="post">
+  <label>Nombre
+    <input type="text" name="name" value="{{ device.name if device else '' }}" required>
+  </label>
+  <label>Sede / Local
+    <input type="text" name="sede" value="{{ device.sede if device else '' }}" placeholder="ej. PISO2, Local Norte...">
+  </label>
+  <label>IP
+    <input type="text" name="ip" value="{{ device.ip if device else '' }}" required>
+  </label>
+  <label>Puerto
+    <input type="number" name="port" value="{{ device.port if device else 4370 }}" required>
+  </label>
+  <label>Llave de comunicación (comm key)
+    <input type="number" name="comm_password" value="{{ device.comm_password if device and device.comm_password else '' }}" placeholder="Déjalo vacío si el equipo no tiene una configurada">
+  </label>
+  <label>Número de dispositivo (opcional, solo informativo)
+    <input type="number" name="terminal_no" value="{{ device.terminal_no if device and device.terminal_no else '' }}" placeholder="Como en ZKTimeNet, si lo usan">
+  </label>
+  {% if device %}
+  <label style="flex-direction: row; align-items: center; gap: 8px;">
+    <input type="checkbox" name="active" {{ 'checked' if device.active }} style="width:auto;"> Activo (se incluye en la sincronización)
+  </label>
+  {% endif %}
+  <div class="muted">Guarda primero, luego usa "Probar conexión" en la lista de dispositivos para confirmar que responde y capturar su modelo/serie reales.</div>
+  <button type="submit">Guardar</button>
+</form>
+
+{% if device %}
+<div class="device-card" style="max-width:480px; margin-top:16px; border:1px solid #fee2e2;">
+  <h3 style="color:#991b1b;">Eliminar dispositivo</h3>
+  {% if history_count %}
+  <p class="muted">Este dispositivo tiene <strong>{{ history_count }}</strong> marcación(es) en el historial. Si solo quieres dejar de sincronizarlo sin perder datos, desmarca "Activo" arriba y guarda -- no hace falta borrarlo.</p>
+  <form method="post" action="{{ url_for('device_delete', device_pk=device.id) }}"
+        onsubmit="return confirm('Esto borra \'{{ device.name }}\' Y sus {{ history_count }} marcaciones del historial, para siempre. ¿Confirmas?');">
+    <input type="hidden" name="force" value="1">
+    <button type="submit" class="btn danger">Eliminar (borra también el historial)</button>
+  </form>
+  {% else %}
+  <p class="muted">Sin marcaciones en el historial -- se puede eliminar sin perder datos.</p>
+  <form method="post" action="{{ url_for('device_delete', device_pk=device.id) }}"
+        onsubmit="return confirm('¿Eliminar \'{{ device.name }}\'?');">
+    <button type="submit" class="btn danger">Eliminar dispositivo</button>
+  </form>
+  {% endif %}
+</div>
+{% endif %}
+{% endblock %}

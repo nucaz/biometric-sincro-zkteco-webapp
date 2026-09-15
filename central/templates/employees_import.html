@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block title %}Importar empleados{% endblock %}
+{% block content %}
+<h2>Importar empleados desde Excel</h2>
+<div class="device-card" style="max-width:520px;">
+  <p class="muted">El archivo debe tener una primera fila con encabezados. Se reconoce cualquiera de estos nombres (sin distinguir mayúsculas):</p>
+  <ul class="muted">
+    <li><strong>Código / DNI</strong>: columna "codigo", "código", "code", "dni" o "id" (opcional, pero necesaria para que no se dupliquen empleados si vuelves a importar)</li>
+    <li><strong>Nombre</strong>: columna "nombre", "nombre completo", "full_name" o "name" (obligatoria)</li>
+  </ul>
+  <p class="muted">Si el código de una fila ya existe en el maestro, se actualiza el nombre; si no existe, se crea un empleado nuevo. Las filas sin nombre se omiten.</p>
+  <form method="post" enctype="multipart/form-data">
+    <input type="file" name="xlsx_file" accept=".xlsx" required style="margin-bottom:10px;">
+    <button type="submit">Importar</button>
+  </form>
+</div>
+{% endblock %}

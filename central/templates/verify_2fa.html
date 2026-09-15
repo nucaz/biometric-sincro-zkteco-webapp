@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Verificación en dos pasos</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; background: #1f2937; height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center; }
+  form { background: #fff; padding: 32px; border-radius: 8px; width: 300px; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+  h1 { font-size: 18px; margin: 0 0 8px; }
+  p { font-size: 13px; color: #6b7280; margin: 0 0 16px; }
+  input[type=text] { width: 100%; padding: 10px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; font-size: 20px; letter-spacing: 4px; text-align: center; }
+  button { width: 100%; padding: 9px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  .flash { background: #fee2e2; border: 1px solid #ef4444; padding: 8px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
+  label.remember { display: flex; align-items: center; gap: 8px; font-size: 13px; color: #374151; margin-bottom: 14px; }
+</style>
+</head>
+<body>
+<form method="post">
+  <h1>Verificación en dos pasos</h1>
+  <p>Cuenta: <strong>{{ username }}</strong>. Ingresa el código de 6 dígitos de tu app autenticadora.</p>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+  {% endwith %}
+  <input type="text" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" autofocus required placeholder="000000">
+  <label class="remember">
+    <input type="checkbox" name="remember_device" checked style="width:auto;"> Recordar este equipo por 30 días
+  </label>
+  <button type="submit">Verificar</button>
+</form>
+</body>
+</html>

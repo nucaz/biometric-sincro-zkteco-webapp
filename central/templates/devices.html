@@ -1,0 +1,66 @@
+{% extends "base.html" %}
+{% block title %}Dispositivos{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <span class="muted">Cada dispositivo se identifica por su número de serie (o ip:puerto si aún no se ha probado la conexión) — así renombrarlo o cambiarle la IP nunca pierde su historial.</span>
+  {% if can_manage %}
+  <div style="display:flex; gap:8px; flex-shrink:0;">
+    <form method="post" action="{{ url_for('sync_now') }}" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Sincronizando... puede tardar un par de minutos';">
+      <button type="submit">Sincronizar todos</button>
+    </form>
+    <a class="btn" href="{{ url_for('device_new') }}">+ Agregar dispositivo</a>
+  </div>
+  {% endif %}
+</div>
+
+<div class="card-grid">
+  {% for d in devices %}
+  <div class="device-card">
+    <h3>
+      <span class="status-dot {{ 'ok' if d.last_sync_status and d.last_sync_status.startswith('OK') else ('bad' if d.last_sync_status else '') }}"></span>
+      {{ d.name }}
+      {% if not d.active %}<span class="badge warn">inactivo</span>{% endif %}
+    </h3>
+    <dl class="meta">
+      <dt>Sede</dt><dd>{{ d.sede or '-' }}</dd>
+      <dt>IP</dt><dd>{{ d.ip }}:{{ d.port }}</dd>
+      <dt>Modelo</dt><dd>{{ d.model or '-' }}</dd>
+      <dt>ID estable</dt><dd>{{ d.device_id }}</dd>
+      <dt>Últ. sincronización</dt><dd>{{ d.last_synced_at.strftime('%Y-%m-%d %H:%M:%S') if d.last_synced_at else 'Nunca' }}</dd>
+      <dt>Estado</dt><dd>{{ d.last_sync_status or '-' }}</dd>
+    </dl>
+
+    {% if can_manage %}
+    <div class="btn-group">
+      <a class="btn secondary" href="{{ url_for('device_edit', device_pk=d.id) }}">Editar</a>
+      <a class="btn secondary" href="{{ url_for('device_users', device_pk=d.id) }}">Usuarios</a>
+    </div>
+    <div class="btn-group">
+      <form method="post" action="{{ url_for('device_test', device_pk=d.id) }}"><button type="submit">Probar conexión</button></form>
+      <form method="post" action="{{ url_for('device_ping', device_pk=d.id) }}"><button type="submit" class="secondary" style="background:#0891b2;">Ping</button></form>
+      <form method="post" action="{{ url_for('device_sync_one', device_pk=d.id) }}"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Sincronizando...';">
+        <button type="submit" class="secondary" style="background:#7c3aed;">Sincronizar este</button>
+      </form>
+    </div>
+    <div class="btn-group">
+      <form method="post" action="{{ url_for('device_restart', device_pk=d.id) }}"
+            onsubmit="return confirm('¿Reiniciar {{ d.name }} ({{ d.ip }}) ahora mismo? El equipo quedará fuera de servicio unos segundos mientras reinicia.');">
+        <button type="submit" class="btn secondary">Reiniciar</button>
+      </form>
+      <form method="post" action="{{ url_for('device_poweroff', device_pk=d.id) }}"
+            onsubmit="return confirm('¿Apagar {{ d.name }} ({{ d.ip }}) ahora mismo? A diferencia de reiniciar, NO volverá a encender solo — alguien deberá presionar el botón físico.');">
+        <button type="submit" class="btn danger">Apagar</button>
+      </form>
+      <form method="post" action="{{ url_for('device_delete', device_pk=d.id) }}"
+            onsubmit="return confirm('¿Eliminar {{ d.name }}? Si tiene historial de marcaciones, se te pedirá confirmarlo aparte en Editar.');">
+        <button type="submit" class="btn danger">Eliminar</button>
+      </form>
+    </div>
+    {% endif %}
+  </div>
+  {% else %}
+  <p class="muted">No hay dispositivos registrados.</p>
+  {% endfor %}
+</div>
+{% endblock %}

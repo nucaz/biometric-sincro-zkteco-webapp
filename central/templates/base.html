@@ -1,0 +1,80 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>{% block title %}Asistencia{% endblock %}</title>
+<style>
+  :root { color-scheme: light; }
+  body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f4f5f7; color: #1a1a1a; }
+  header { background: #1f2937; color: #fff; padding: 12px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 0; }
+  nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
+  header a { color: #fff; text-decoration: none; font-size: 14px; white-space: nowrap; }
+  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
+  table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  th, td { padding: 8px 12px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
+  th { background: #f9fafb; position: sticky; top: 0; }
+  form.filters { display: flex; flex-wrap: wrap; gap: 12px; align-items: end; margin-bottom: 16px; background: #fff; padding: 16px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
+  form.filters label { display: flex; flex-direction: column; font-size: 12px; color: #555; gap: 4px; }
+  input, select { padding: 6px 8px; border: 1px solid #ccc; border-radius: 4px; font-size: 14px; }
+  button, .btn { padding: 7px 14px; border: none; border-radius: 4px; background: #2563eb; color: #fff; cursor: pointer; font-size: 14px; text-decoration: none; display: inline-block; }
+  button:hover, .btn:hover { background: #1d4ed8; }
+  .btn.danger { background: #dc2626; }
+  .btn.danger:hover { background: #b91c1c; }
+  .btn.secondary { background: #6b7280; }
+  .btn.secondary:hover { background: #4b5563; }
+  .muted { color: #6b7280; font-size: 13px; }
+  .flash { background: #fef3c7; border: 1px solid #f59e0b; padding: 8px 12px; border-radius: 4px; margin-bottom: 12px; }
+  .pager { margin-top: 12px; display: flex; gap: 8px; align-items: center; }
+  .toolbar { margin-bottom: 16px; display: flex; justify-content: space-between; align-items: center; }
+  form.card { background: #fff; padding: 20px; border-radius: 6px; box-shadow: 0 1px 3px rgba(0,0,0,.1); max-width: 480px; display: flex; flex-direction: column; gap: 12px; }
+  form.card label { display: flex; flex-direction: column; font-size: 13px; color: #374151; gap: 4px; }
+  .badge { display: inline-block; padding: 2px 8px; border-radius: 12px; font-size: 12px; background: #e5e7eb; }
+  .badge.warn { background: #fee2e2; color: #991b1b; }
+  .badge.role { background: #dbeafe; color: #1e40af; }
+  .inline-form { display: inline; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .device-card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .device-card h3 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
+  .device-card .meta { font-size: 13px; color: #4b5563; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
+  .device-card .meta dt { color: #9ca3af; }
+  .device-card .meta dd { margin: 0; }
+  .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
+  .btn-group form { margin: 0; }
+  .btn-group .btn, .btn-group button { font-size: 13px; padding: 6px 10px; }
+  .status-dot { width: 9px; height: 9px; border-radius: 50%; display: inline-block; background: #9ca3af; }
+  .status-dot.ok { background: #16a34a; }
+  .status-dot.bad { background: #dc2626; }
+  footer.app-footer { text-align: center; padding: 24px 12px; color: #9ca3af; font-size: 12px; }
+</style>
+</head>
+<body>
+<header>
+  <strong>Asistencia - Panel RRHH</strong>
+  <nav>
+    <a href="{{ url_for('dashboard') }}">Marcaciones</a>
+    <a href="{{ url_for('devices_status') }}">Dispositivos</a>
+    {% if can_manage %}
+    <a href="{{ url_for('employees_list') }}">Empleados</a>
+    <a href="{{ url_for('employees_unmapped') }}">Sin vincular</a>
+    {% endif %}
+    {% if is_super_admin %}
+    <a href="{{ url_for('users_list') }}">Cuentas</a>
+    <a href="{{ url_for('backup_page') }}">Backup</a>
+    {% endif %}
+    <a href="{{ url_for('account_security') }}">Seguridad</a>
+    <span class="badge role">{{ current_role_label }}</span>
+    <span class="muted" style="color:#9ca3af;">{{ current_username }}</span>
+    <a href="{{ url_for('logout') }}">Salir</a>
+  </nav>
+</header>
+<main>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+  {% endwith %}
+  {% block content %}{% endblock %}
+</main>
+<footer class="app-footer">
+  Develop Juan Carlos Aguirre Alvarado — Infraestructura TI &amp; Ciberseguridad Apps
+</footer>
+</body>
+</html>

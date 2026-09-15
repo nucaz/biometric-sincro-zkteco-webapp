@@ -1,0 +1,26 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<title>Ingresar - Asistencia</title>
+<style>
+  body { font-family: Segoe UI, Arial, sans-serif; background: #1f2937; height: 100vh; margin: 0; display: flex; align-items: center; justify-content: center; }
+  form { background: #fff; padding: 32px; border-radius: 8px; width: 280px; box-shadow: 0 4px 12px rgba(0,0,0,.3); }
+  h1 { font-size: 18px; margin: 0 0 16px; }
+  input { width: 100%; padding: 8px; margin-bottom: 12px; border: 1px solid #ccc; border-radius: 4px; box-sizing: border-box; }
+  button { width: 100%; padding: 9px; background: #2563eb; color: #fff; border: none; border-radius: 4px; cursor: pointer; }
+  .flash { background: #fee2e2; border: 1px solid #ef4444; padding: 8px; border-radius: 4px; margin-bottom: 12px; font-size: 13px; }
+</style>
+</head>
+<body>
+<form method="post">
+  <h1>Panel de Asistencia - RRHH</h1>
+  {% with messages = get_flashed_messages() %}
+    {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+  {% endwith %}
+  <input type="text" name="username" placeholder="Usuario" autofocus required>
+  <input type="password" name="password" placeholder="Contraseña" required>
+  <button type="submit">Ingresar</button>
+</form>
+</body>
+</html>

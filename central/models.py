@@ -1,0 +1,121 @@
+from datetime import datetime, timezone
+from sqlalchemy import (
+    Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, Text, Boolean
+)
+from sqlalchemy.orm import relationship
+from .db import Base
+
+
+def utcnow():
+    return datetime.now(timezone.utc)
+
+
+class Device(Base):
+    """A physical biometric terminal. device_id is the stable identity
+    (the terminal's own serial number when known, otherwise ip:port) so
+    renaming a device or changing its IP never orphans its history."""
+    __tablename__ = "devices"
+
+    id = Column(Integer, primary_key=True)
+    device_id = Column(String(64), unique=True, nullable=False)
+    name = Column(String(120), nullable=False)
+    sede = Column(String(120), nullable=True)  # branch / location label for HR filtering
+    ip = Column(String(64), nullable=False)
+    port = Column(Integer, nullable=False, default=4370)
+    comm_password = Column(Integer, nullable=False, default=0)  # ZK "comm key" -- 0 means none set
+    terminal_no = Column(Integer, nullable=True)  # ZKTeco's own device-number label, informational only
+    model = Column(String(64), nullable=True)
+    active = Column(Integer, nullable=False, default=1)  # 1/0, avoid polling retired devices
+    last_synced_at = Column(DateTime, nullable=True)
+    last_sync_status = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    logs = relationship("AttendanceLog", back_populates="device")
+    employee_links = relationship("EmployeeMap", back_populates="device")
+
+
+class AttendanceLog(Base):
+    """One raw punch. device_user_id is the ID as enrolled on that specific
+    device -- it is only unique WITHIN a device, never across devices, so
+    every query/join must go through (device_id, device_user_id) together."""
+    __tablename__ = "attendance_log"
+    __table_args__ = (
+        UniqueConstraint("device_pk", "device_user_id", "timestamp", name="uq_device_user_ts"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    device_pk = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    device_user_id = Column(String(32), nullable=False)
+    user_name = Column(String(120), nullable=True)  # name as reported by the device at sync time
+    timestamp = Column(DateTime, nullable=False)
+    status = Column(String(32), nullable=True)  # 'Check In' / 'Check Out' / 'Unknown Punch (n)'
+    synced_at = Column(DateTime, default=utcnow, nullable=False)
+
+    device = relationship("Device", back_populates="logs")
+
+
+class Employee(Base):
+    """Master employee record, independent of any one device. One employee
+    can be linked (via EmployeeMap) to a different device_user_id at every
+    sede they're enrolled in."""
+    __tablename__ = "employees"
+
+    id = Column(Integer, primary_key=True)
+    code = Column(String(32), unique=True, nullable=True)  # your own HR/payroll code, optional
+    full_name = Column(String(120), nullable=False)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    device_links = relationship("EmployeeMap", back_populates="employee")
+
+
+class EmployeeMap(Base):
+    """Links a (device, device_user_id) pair -- the identity as enrolled on
+    one specific terminal -- to a canonical Employee. Until HR fills this
+    in, the dashboard just falls back to the device's own reported
+    user_name (often "NN-<id>" for users enrolled without a name)."""
+    __tablename__ = "employee_map"
+    __table_args__ = (
+        UniqueConstraint("device_pk", "device_user_id", name="uq_employee_map_device_user"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    device_pk = Column(Integer, ForeignKey("devices.id"), nullable=False)
+    device_user_id = Column(String(32), nullable=False)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+
+    device = relationship("Device", back_populates="employee_links")
+    employee = relationship("Employee", back_populates="device_links")
+
+
+class User(Base):
+    """An account that can log into the HR web dashboard (distinct from
+    Employee / device users -- this is who's allowed to operate the tool)."""
+    __tablename__ = "users"
+
+    id = Column(Integer, primary_key=True)
+    username = Column(String(64), unique=True, nullable=False)
+    password_hash = Column(String(255), nullable=False)
+    role = Column(String(16), nullable=False, default="viewer")  # 'super_admin' | 'admin' | 'viewer'
+    active = Column(Boolean, nullable=False, default=True)
+    totp_secret = Column(String(64), nullable=True)
+    totp_enabled = Column(Boolean, nullable=False, default=False)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    trusted_devices = relationship("TrustedDevice", back_populates="user")
+
+
+class TrustedDevice(Base):
+    """A browser that skipped OTP on its last login because it already
+    proved the 6-digit code once. Identified by the hash of a random
+    token in a long-lived cookie -- never the raw token itself."""
+    __tablename__ = "trusted_devices"
+
+    id = Column(Integer, primary_key=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    token_hash = Column(String(255), nullable=False)
+    label = Column(String(200), nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    expires_at = Column(DateTime, nullable=False)
+
+    user = relationship("User", back_populates="trusted_devices")

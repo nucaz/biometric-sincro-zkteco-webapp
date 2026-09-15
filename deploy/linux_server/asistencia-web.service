@@ -1,0 +1,17 @@
+[Unit]
+Description=Asistencia - Panel web (gunicorn)
+After=network.target postgresql.service
+Wants=postgresql.service
+
+[Service]
+Type=simple
+User=asistencia
+Group=asistencia
+WorkingDirectory=/opt/asistencia
+EnvironmentFile=/opt/asistencia/central.env
+ExecStart=/opt/asistencia/venv/bin/gunicorn --bind 0.0.0.0:5000 --workers 2 --timeout 120 central.webapp:app
+Restart=on-failure
+RestartSec=5
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,11 @@
+[Unit]
+Description=Asistencia - sincronizacion de relojes (una corrida)
+After=network.target postgresql.service
+
+[Service]
+Type=oneshot
+User=asistencia
+Group=asistencia
+WorkingDirectory=/opt/asistencia
+EnvironmentFile=/opt/asistencia/central.env
+ExecStart=/opt/asistencia/venv/bin/python -m central.sync

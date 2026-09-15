@@ -1,0 +1,59 @@
+{% extends "base.html" %}
+{% block title %}Usuarios en {{ device.name }}{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0;">Usuarios enrolados en {{ device.name }} ({{ device.ip }})</h2>
+  <a class="btn" href="{{ url_for('device_user_new', device_pk=device.id) }}">+ Agregar usuario</a>
+</div>
+<p class="muted">Esta lista se lee en vivo del dispositivo (no de la base central). Crear/editar/eliminar aquí escribe directamente en el reloj físico.</p>
+
+<input type="text" id="userSearch" placeholder="Buscar por ID / DNI, apellido o código..." style="width:100%; max-width:420px; margin-bottom:12px;" autofocus>
+<p class="muted" id="userSearchCount"></p>
+
+<table id="userTable">
+  <thead>
+    <tr><th>ID (device_user_id)</th><th>Nombre en el reloj</th><th>Privilegio</th><th>Tarjeta</th><th>Vinculado a</th><th>Acciones</th></tr>
+  </thead>
+  <tbody>
+    {% for u in users %}
+    <tr data-search="{{ u.user_id }}|{{ u.name }}|{{ u.employee.full_name if u.employee else '' }}|{{ u.employee.code if u.employee else '' }}">
+      <td>{{ u.user_id }}</td>
+      <td>{{ u.name }}</td>
+      <td>{{ u.privilege_label }}</td>
+      <td>{{ u.card or '-' }}</td>
+      <td>{{ u.employee.full_name if u.employee else '—' }}{% if u.employee and u.employee.code %} ({{ u.employee.code }}){% endif %}</td>
+      <td class="btn-group">
+        <a class="btn secondary" href="{{ url_for('device_user_edit', device_pk=device.id, user_id=u.user_id) }}">Editar</a>
+        <form class="inline-form" method="post" action="{{ url_for('device_user_delete', device_pk=device.id, user_id=u.user_id) }}"
+              onsubmit="return confirm('¿Eliminar a {{ u.name }} (ID {{ u.user_id }}) del dispositivo {{ device.name }}? Esto borra su huella/tarjeta del equipo. Su historial de marcaciones NO se borra.');">
+          <button type="submit" class="btn danger">Eliminar del dispositivo</button>
+        </form>
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="6" class="muted">No hay usuarios enrolados en este dispositivo.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+
+<script>
+(function () {
+  var input = document.getElementById('userSearch');
+  var rows = Array.prototype.slice.call(document.querySelectorAll('#userTable tbody tr[data-search]'));
+  var countLabel = document.getElementById('userSearchCount');
+  function normalize(s) { return (s || '').toString().toLowerCase(); }
+  function applyFilter() {
+    var term = normalize(input.value).trim();
+    var visible = 0;
+    rows.forEach(function (row) {
+      var haystack = normalize(row.getAttribute('data-search'));
+      var match = term === '' || haystack.indexOf(term) !== -1;
+      row.hidden = !match;
+      if (match) visible++;
+    });
+    countLabel.textContent = term ? (visible + ' de ' + rows.length + ' usuario(s)') : '';
+  }
+  input.addEventListener('input', applyFilter);
+})();
+</script>
+{% endblock %}

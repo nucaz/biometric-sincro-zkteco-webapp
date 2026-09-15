@@ -1,0 +1,18 @@
+# central/*.py imports attendance_system.py (the same device-communication
+# layer the desktop app uses), which needs these -- listed explicitly here
+# too so `pip install -r central/requirements.txt` alone is enough on a
+# fresh server (don't rely on the desktop app's requirements.txt being
+# installed in the same environment).
+pyzk
+pandas>=2.0.0
+python-dateutil>=2.8.2
+SQLAlchemy>=2.0
+Flask>=3.0
+openpyxl>=3.1
+fpdf2>=2.8
+pyotp>=2.9
+qrcode[pil]>=7.4
+psycopg2-binary>=2.9   # only needed if DATABASE_URL points at PostgreSQL
+PyMySQL>=1.1           # only needed if DATABASE_URL points at MySQL
+gunicorn>=22.0; sys_platform != 'win32'   # production server -- Linux/macOS only (no fork() on Windows)
+waitress>=3.0; sys_platform == 'win32'    # production server for Windows

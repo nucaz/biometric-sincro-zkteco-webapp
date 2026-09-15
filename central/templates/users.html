@@ -1,0 +1,32 @@
+{% extends "base.html" %}
+{% block title %}Cuentas{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0;">Cuentas del panel web</h2>
+  <a class="btn" href="{{ url_for('user_new') }}">+ Nueva cuenta</a>
+</div>
+<table>
+  <thead><tr><th>Usuario</th><th>Rol</th><th>Estado</th><th>2FA</th><th></th></tr></thead>
+  <tbody>
+    {% for u in users %}
+    <tr>
+      <td>{{ u.username }}</td>
+      <td>{{ {'super_admin': 'Super administrador', 'admin': 'Administrador', 'viewer': 'Solo lectura'}.get(u.role, u.role) }}</td>
+      <td>{% if u.active %}Activo{% else %}<span class="badge warn">Inactivo</span>{% endif %}</td>
+      <td>{% if u.totp_enabled %}Activado{% else %}-{% endif %}</td>
+      <td class="btn-group">
+        <form class="inline-form" method="post" action="{{ url_for('user_toggle', user_pk=u.id) }}">
+          <button type="submit" class="btn secondary">{{ 'Desactivar' if u.active else 'Activar' }}</button>
+        </form>
+        {% if u.totp_enabled %}
+        <form class="inline-form" method="post" action="{{ url_for('user_reset_2fa', user_pk=u.id) }}"
+              onsubmit="return confirm('¿Resetear el 2FA de {{ u.username }}? Podrá entrar solo con su contraseña hasta que lo active de nuevo.');">
+          <button type="submit" class="btn danger">Resetear 2FA</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

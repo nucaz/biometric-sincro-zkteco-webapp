@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Nueva cuenta{% endblock %}
+{% block content %}
+<h2>Nueva cuenta del panel</h2>
+<form class="card" method="post">
+  <label>Usuario
+    <input type="text" name="username" required>
+  </label>
+  <label>Contraseña
+    <input type="password" name="password" required minlength="6">
+  </label>
+  <label>Rol
+    <select name="role">
+      <option value="viewer">Solo lectura — ve todos los módulos y exporta marcaciones, sin configurar nada</option>
+      <option value="admin">Administrador — agrega/edita relojes biométricos y empleados</option>
+      <option value="super_admin">Super administrador — todo lo anterior + cuentas del panel y backup/restore</option>
+    </select>
+  </label>
+  <button type="submit">Crear cuenta</button>
+</form>
+{% endblock %}

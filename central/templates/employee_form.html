@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar empleado' if employee else 'Nuevo empleado' }}{% endblock %}
+{% block content %}
+<h2>{{ 'Editar empleado' if employee else 'Nuevo empleado' }}</h2>
+<form class="card" method="post">
+  <label>Código (opcional, ej. código de nómina)
+    <input type="text" name="code" value="{{ employee.code if employee else '' }}">
+  </label>
+  <label>Nombre completo
+    <input type="text" name="full_name" value="{{ employee.full_name if employee else '' }}" required>
+  </label>
+  {% if employee %}
+  <label style="flex-direction: row; align-items: center; gap: 8px;">
+    <input type="checkbox" name="active" {{ 'checked' if employee.active }} style="width:auto;"> Activo
+  </label>
+  <label style="flex-direction: row; align-items: center; gap: 8px;">
+    <input type="checkbox" name="push_to_devices" checked style="width:auto;"> Si cambio el nombre, actualizarlo también en los relojes donde está vinculado
+  </label>
+  {% endif %}
+  <button type="submit">Guardar</button>
+</form>
+{% endblock %}

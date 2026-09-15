@@ -1,0 +1,44 @@
+{% extends "base.html" %}
+{% block title %}Sin vincular{% endblock %}
+{% block content %}
+<h2>Identidades sin vincular a un empleado</h2>
+<p class="muted">Estas son combinaciones (dispositivo, ID) vistas en las marcaciones que todavía no tienen un empleado del maestro asignado — por eso salen como "NN-xxxxx" en los reportes. El ID suele ser el DNI: si ya existe un empleado en el maestro con ese mismo código, aquí te lo sugerimos de una vez.</p>
+<table>
+  <thead><tr><th>Dispositivo</th><th>ID</th><th>Nombre reportado por el reloj</th><th>Vincular a</th></tr></thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.device_name }}</td>
+      <td>{{ r.device_user_id }}</td>
+      <td>{{ r.reported_name or '-' }}</td>
+      <td>
+        {% if r.suggested %}
+        <form class="inline-form" method="post" action="{{ url_for('employee_map_create') }}" style="display:flex; gap:6px; align-items:center;">
+          <input type="hidden" name="device_pk" value="{{ r.device_pk }}">
+          <input type="hidden" name="device_user_id" value="{{ r.device_user_id }}">
+          <input type="hidden" name="employee_id" value="{{ r.suggested.id }}">
+          <span class="badge" style="background:#dcfce7; color:#166534;">Coincide por código: {{ r.suggested.full_name }}</span>
+          <button type="submit">Vincular</button>
+        </form>
+        {% else %}
+        <form class="inline-form" method="post" action="{{ url_for('employee_map_create') }}" style="display:flex; gap:6px;">
+          <input type="hidden" name="device_pk" value="{{ r.device_pk }}">
+          <input type="hidden" name="device_user_id" value="{{ r.device_user_id }}">
+          <select name="employee_id" style="max-width:160px;" title="Deja en '— nuevo empleado —' solo si esta persona no existe todavía en el maestro">
+            <option value="">— nuevo empleado —</option>
+            {% for e in employees %}
+              <option value="{{ e.id }}">{{ e.full_name }}{% if e.code %} ({{ e.code }}){% endif %}</option>
+            {% endfor %}
+          </select>
+          <input type="text" name="new_employee_name" placeholder="Nombre si es nuevo" style="max-width:160px;">
+          <button type="submit">Vincular</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">Todo vinculado — no hay pendientes.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

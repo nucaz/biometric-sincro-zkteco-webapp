@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+{% block title %}Marcaciones{% endblock %}
+{% block content %}
+<form class="filters" method="get">
+  <input type="hidden" name="view" value="{{ view }}">
+  <label>Desde
+    <input type="date" name="start" value="{{ args.get('start', '') }}">
+  </label>
+  <label>Hasta
+    <input type="date" name="end" value="{{ args.get('end', '') }}">
+  </label>
+  <label>Sede
+    <select name="sede">
+      <option value="">Todas</option>
+      {% for s in sedes %}
+        <option value="{{ s }}" {{ 'selected' if args.get('sede') == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Dispositivo
+    <select name="device">
+      <option value="">Todos</option>
+      {% for d in devices %}
+        <option value="{{ d.device_id }}" {{ 'selected' if args.get('device') == d.device_id }}>{{ d.name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Buscar (nombre o ID)
+    <input type="text" name="q" value="{{ args.get('q', '') }}">
+  </label>
+  <button type="submit">Filtrar</button>
+  <a class="btn" href="{{ url_for('export_csv', **args) }}">Exportar CSV</a>
+  <a class="btn" href="{{ url_for('export_xlsx', **args) }}">Exportar Excel</a>
+  <a class="btn" href="{{ url_for('export_pdf', **args) }}">Exportar PDF</a>
+</form>
+
+<div class="toolbar">
+  <p class="muted" style="margin:0;">{{ total }} registro(s) encontrados. Mostrando página {{ page }} ({{ page_size }} por página).</p>
+  <div>
+    <a class="btn {{ 'secondary' if view != 'grouped' }}" href="?{% for k,v in args.items() if k not in ['view','page'] %}{{ k }}={{ v }}&{% endfor %}view=grouped">Resumen por día</a>
+    <a class="btn {{ 'secondary' if view != 'raw' }}" href="?{% for k,v in args.items() if k not in ['view','page'] %}{{ k }}={{ v }}&{% endfor %}view=raw">Marcaciones crudas</a>
+  </div>
+</div>
+
+{% if view == 'grouped' %}
+<p class="muted">Entrada = primera marcación del día, Salida = última (solo si hubo más de una). "Marcaciones" cuenta cuántas veces tocó el sensor ese día — varias en pocos segundos suelen ser reintentos de la misma persona, no gente distinta.</p>
+<table>
+  <thead>
+    <tr><th>Sede</th><th>Dispositivo</th><th>Empleado</th><th>ID</th><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Marcaciones</th></tr>
+  </thead>
+  <tbody>
+    {% for r in records %}
+    <tr>
+      <td>{{ r.sede }}</td>
+      <td>{{ r.device_name }}</td>
+      <td>{{ r.employee }}</td>
+      <td>{{ r.device_user_id }}</td>
+      <td>{{ r.date.strftime('%Y-%m-%d') }}</td>
+      <td>{{ r.check_in.strftime('%H:%M:%S') }}</td>
+      <td>{{ r.check_out.strftime('%H:%M:%S') if r.check_out else '-' }}</td>
+      <td>{{ r.punches }}{% if r.punches > 2 %} <span class="badge warn">revisar</span>{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="8" class="muted">Sin registros para este filtro.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% else %}
+<table>
+  <thead>
+    <tr><th>Sede</th><th>Dispositivo</th><th>Empleado</th><th>ID</th><th>Fecha</th><th>Hora</th><th>Estado</th></tr>
+  </thead>
+  <tbody>
+    {% for r in records %}
+    <tr>
+      <td>{{ r.sede }}</td>
+      <td>{{ r.device_name }}</td>
+      <td>{{ r.employee }}</td>
+      <td>{{ r.device_user_id }}</td>
+      <td>{{ r.timestamp.strftime('%Y-%m-%d') }}</td>
+      <td>{{ r.timestamp.strftime('%H:%M:%S') }}</td>
+      <td>{{ r.status }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">Sin registros para este filtro.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endif %}
+
+<div class="pager">
+  {% if page > 1 %}
+    <a class="btn" href="?{% for k,v in args.items() if k != 'page' %}{{ k }}={{ v }}&{% endfor %}page={{ page - 1 }}">&laquo; Anterior</a>
+  {% endif %}
+  {% if page * page_size < total %}
+    <a class="btn" href="?{% for k,v in args.items() if k != 'page' %}{{ k }}={{ v }}&{% endfor %}page={{ page + 1 }}">Siguiente &raquo;</a>
+  {% endif %}
+</div>
+{% endblock %}

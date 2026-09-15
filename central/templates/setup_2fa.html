@@ -1,0 +1,16 @@
+{% extends "base.html" %}
+{% block title %}Activar 2FA{% endblock %}
+{% block content %}
+<h2>Activar verificación en dos pasos</h2>
+<div class="device-card" style="max-width:420px;">
+  <p class="muted">1. Escanea este código con Google Authenticator, Microsoft Authenticator o similar.</p>
+  <img src="{{ qr }}" alt="Código QR" style="align-self:center; width:220px; height:220px;">
+  <p class="muted">¿No puedes escanear? Ingresa esta clave manualmente: <code>{{ secret }}</code></p>
+  <form class="card" method="post" style="padding:0; box-shadow:none;">
+    <label>2. Escribe el código de 6 dígitos que te muestra la app
+      <input type="text" name="code" inputmode="numeric" pattern="[0-9]*" maxlength="6" required placeholder="000000">
+    </label>
+    <button type="submit">Confirmar y activar</button>
+  </form>
+</div>
+{% endblock %}
