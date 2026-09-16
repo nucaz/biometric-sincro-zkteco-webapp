@@ -26,6 +26,18 @@ param(
 
 $WebTaskName = "AsistenciaWeb"
 $SyncTaskName = "AsistenciaSync"
+$InstallDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+
+function Stop-LingeringPython {
+    # Stop-ScheduledTask can leave the process behind if it's blocked in a
+    # call that doesn't respond to the stop signal quickly (seen for real
+    # against a flaky device) -- without this, Start-ScheduledTask right
+    # after would launch a SECOND process while the stuck old one is still
+    # holding port 5000, not a clean restart.
+    Get-Process -Name "python" -ErrorAction SilentlyContinue |
+        Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, [System.StringComparison]::OrdinalIgnoreCase) } |
+        Stop-Process -Force -ErrorAction SilentlyContinue
+}
 
 $IsAdmin = ([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltinRole]::Administrator)
 if (-not $IsAdmin -and $Action -ne "Status") {
@@ -68,11 +80,13 @@ switch ($Action) {
         Write-Host "Deteniendo la tarea '$WebTaskName'..." -ForegroundColor Cyan
         Stop-ScheduledTask -TaskName $WebTaskName -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 1
+        Stop-LingeringPython
     }
     "Restart" {
         Write-Host "Reiniciando la tarea '$WebTaskName'..." -ForegroundColor Cyan
         Stop-ScheduledTask -TaskName $WebTaskName -ErrorAction SilentlyContinue
         Start-Sleep -Seconds 2
+        Stop-LingeringPython
         Start-ScheduledTask -TaskName $WebTaskName
         Start-Sleep -Seconds 2
     }

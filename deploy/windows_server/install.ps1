@@ -134,6 +134,22 @@ if (-not $IsAdmin) {
 
 Write-Host "Registrando tareas programadas..." -ForegroundColor Cyan
 
+# Register-ScheduledTask -Force below only replaces the task DEFINITION --
+# if AsistenciaWeb is already running from a previous install, it keeps
+# running the OLD code under the new definition, because Start-ScheduledTask
+# on an already-running task is a silent no-op in Windows. Without this,
+# every update after the first one would change the files on disk but never
+# actually take effect until someone happened to restart it separately.
+Write-Host "Deteniendo el panel web si ya estaba corriendo (para que tome el codigo nuevo)..." -ForegroundColor Cyan
+Stop-ScheduledTask -TaskName "AsistenciaWeb" -ErrorAction SilentlyContinue
+# Belt-and-suspenders: a process blocked in a slow/hung network call (seen
+# for real against a flaky device) can outlive Stop-ScheduledTask's signal
+# -- make sure nothing from this install is still alive before continuing.
+Get-Process -Name "python" -ErrorAction SilentlyContinue |
+    Where-Object { $_.Path -and $_.Path.StartsWith($InstallDir, [System.StringComparison]::OrdinalIgnoreCase) } |
+    Stop-Process -Force -ErrorAction SilentlyContinue
+Start-Sleep -Seconds 2
+
 $WebAction = New-ScheduledTaskAction -Execute "$InstallDir\venv\Scripts\python.exe" `
     -Argument "-m waitress --host=0.0.0.0 --port=5000 --threads=16 central.webapp:app" -WorkingDirectory $InstallDir
 $WebTrigger = New-ScheduledTaskTrigger -AtStartup

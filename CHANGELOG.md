@@ -58,6 +58,19 @@ para el procedimiento completo de release.
   noche (23:00 por defecto, configurable con `-SyncTime` en
   `install.ps1`) -- los botones "Sincronizar" del panel siguen
   funcionando al instante cuando se necesite durante el día.
+- "Eliminar" un dispositivo borraba también todo su historial de
+  marcaciones si se forzaba -- ahora nunca lo hace: solo lo oculta de la
+  lista y de la sincronización, con un botón "Restaurar" para traerlo de
+  vuelta.
+- **Bug crítico de actualización en Windows Server**: `install.ps1` nunca
+  detenía el proceso que ya estaba corriendo antes de "iniciarlo" de
+  nuevo -- y `Start-ScheduledTask` sobre una tarea ya activa no hace nada
+  en Windows. Resultado: cada actualización cambiaba los archivos en
+  disco, pero el servicio seguía sirviendo el código viejo hasta que
+  alguien lo reiniciara por separado a mano. Corregido para que
+  `install.ps1` (y el botón "Reiniciar") siempre detengan el proceso
+  -- incluso forzándolo si quedó colgado en una llamada de red -- antes
+  de volver a levantarlo.
 
 ## [1.0.0] - 2026-09-15
 
