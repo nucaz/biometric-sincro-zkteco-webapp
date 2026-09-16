@@ -69,9 +69,18 @@ try {
     & ".\venv\Scripts\python.exe" -m pip install --upgrade pip -q
     & ".\venv\Scripts\python.exe" -m pip install -q -r "central\requirements.txt"
 
-    $RngBytes = New-Object byte[] 32
-    [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($RngBytes)
-    $SecretKey = [System.Convert]::ToBase64String($RngBytes)
+    # Reuse the existing SECRET_KEY on updates -- regenerating it on every
+    # run would silently invalidate every logged-in session (Flask signs
+    # the session cookie with it) each time this script re-runs.
+    $ExistingSecretKey = [Environment]::GetEnvironmentVariable("SECRET_KEY", "Machine")
+    if ($ExistingSecretKey) {
+        $SecretKey = $ExistingSecretKey
+        Write-Host "Reutilizando SECRET_KEY existente (no se cierran las sesiones activas)." -ForegroundColor DarkGray
+    } else {
+        $RngBytes = New-Object byte[] 32
+        [System.Security.Cryptography.RandomNumberGenerator]::Create().GetBytes($RngBytes)
+        $SecretKey = [System.Convert]::ToBase64String($RngBytes)
+    }
 
     # Machine-level env vars are what the scheduled task (running as
     # SYSTEM, its own separate process) will read. They need admin to

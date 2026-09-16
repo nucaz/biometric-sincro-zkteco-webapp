@@ -74,11 +74,18 @@ python3 -m venv "$APP_DIR/venv"
 "$APP_DIR/venv/bin/pip" install -q -r "$APP_DIR/central/requirements.txt"
 
 log "Escribiendo configuración de entorno..."
-cat > "$APP_DIR/central.env" <<EOF
+if [ -f "$APP_DIR/central.env" ]; then
+    # Preserve the existing SECRET_KEY on updates -- regenerating it on
+    # every run would silently invalidate every logged-in session (Flask
+    # signs the session cookie with it) each time this script re-runs.
+    echo "central.env ya existe -- se conserva (evita invalidar sesiones activas)."
+else
+    cat > "$APP_DIR/central.env" <<EOF
 DATABASE_URL=$DATABASE_URL
 SECRET_KEY=$(python3 -c 'import secrets; print(secrets.token_urlsafe(32))')
 EOF
-chmod 600 "$APP_DIR/central.env"
+    chmod 600 "$APP_DIR/central.env"
+fi
 
 chown -R "$SERVICE_USER":"$SERVICE_USER" "$APP_DIR"
 
