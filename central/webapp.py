@@ -114,13 +114,24 @@ def _audit_context():
     }
 
 
+SSE_SILENCE_TIMEOUT = 180  # seconds -- see _sse_stream
+
+
 def _sse_stream(worker):
     """Runs `worker(progress, ctx)` in a background thread (ctx = a dict
     from _audit_context(), since that thread has no request context of its
     own) and yields its progress(...) calls as Server-Sent Events in real
     time, ending with one 'done' or 'error' event. Used to drive the live
     sync progress view instead of the browser just hanging on a blocked
-    request for a minute or two with no feedback."""
+    request for a minute or two with no feedback.
+
+    If nothing arrives for SSE_SILENCE_TIMEOUT seconds straight (a pyzk
+    socket read that hangs instead of raising -- has happened against a
+    flaky device), this gives up on watching it and ends the response
+    instead of holding the connection -- and the waitress/gunicorn worker
+    thread serving it -- open forever. The background thread itself is a
+    daemon, so it can't be killed cleanly, but it can no longer block
+    anything else once this generator returns."""
     ctx = _audit_context()
     q = queue.Queue()
 
@@ -137,7 +148,11 @@ def _sse_stream(worker):
 
     def generate():
         while True:
-            kind, payload = q.get()
+            try:
+                kind, payload = q.get(timeout=SSE_SILENCE_TIMEOUT)
+            except queue.Empty:
+                yield 'event: error\ndata: {"message": "Sin respuesta por más de 3 minutos -- el intento puede seguir en el servidor, pero se dejó de esperar aquí."}\n\n'
+                break
             data = json.dumps(payload) if not isinstance(payload, str) else json.dumps({"message": payload})
             yield f"event: {kind}\ndata: {data}\n\n"
             if kind in ("done", "error"):

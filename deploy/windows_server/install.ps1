@@ -129,7 +129,7 @@ if (-not $IsAdmin) {
 Write-Host "Registrando tareas programadas..." -ForegroundColor Cyan
 
 $WebAction = New-ScheduledTaskAction -Execute "$InstallDir\venv\Scripts\python.exe" `
-    -Argument "-m waitress --host=0.0.0.0 --port=5000 central.webapp:app" -WorkingDirectory $InstallDir
+    -Argument "-m waitress --host=0.0.0.0 --port=5000 --threads=16 central.webapp:app" -WorkingDirectory $InstallDir
 $WebTrigger = New-ScheduledTaskTrigger -AtStartup
 $WebSettings = New-ScheduledTaskSettingsSet -RestartCount 999 -RestartInterval (New-TimeSpan -Minutes 1) -AllowStartIfOnBatteries -DontStopIfGoingOnBatteries -ExecutionTimeLimit (New-TimeSpan -Days 0)
 Register-ScheduledTask -TaskName "AsistenciaWeb" -Action $WebAction -Trigger $WebTrigger -Settings $WebSettings `

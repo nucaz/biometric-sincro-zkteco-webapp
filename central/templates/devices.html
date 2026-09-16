@@ -72,19 +72,25 @@
     <h3 id="sync-modal-title" style="margin:0;">Sincronizando...</h3>
     <div id="sync-modal-log" class="sync-modal-log"></div>
     <div id="sync-modal-result" class="sync-modal-result"></div>
-    <button id="sync-modal-close" class="btn secondary" onclick="closeSyncModal()" disabled>Cerrar</button>
+    <p id="sync-modal-hint" class="muted" style="margin:0; font-size:12px;">Puedes cerrar esta ventana en cualquier momento -- es solo lectura, no pasa nada si la sincronización sigue en el servidor de fondo.</p>
+    <button id="sync-modal-close" class="btn secondary" onclick="closeSyncModal()">Cerrar</button>
   </div>
 </div>
 
 <script>
+var syncEventSource = null;
+var syncWatchdog = null;
+
 function openSyncModal(title) {
   document.getElementById('sync-modal-title').textContent = title;
   document.getElementById('sync-modal-log').textContent = '';
   document.getElementById('sync-modal-result').textContent = '';
-  document.getElementById('sync-modal-close').disabled = true;
+  document.getElementById('sync-modal-hint').hidden = false;
   document.getElementById('sync-modal').hidden = false;
 }
 function closeSyncModal() {
+  if (syncEventSource) { syncEventSource.close(); syncEventSource = null; }
+  if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
   document.getElementById('sync-modal').hidden = true;
   location.reload();
 }
@@ -93,12 +99,35 @@ function appendSyncLog(msg) {
   log.textContent += msg + "\n";
   log.scrollTop = log.scrollHeight;
 }
+function finishSync(msg) {
+  appendSyncLog(msg);
+  document.getElementById('sync-modal-result').textContent = msg;
+  document.getElementById('sync-modal-hint').hidden = true;
+  if (syncEventSource) { syncEventSource.close(); syncEventSource = null; }
+  if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
+}
+function armWatchdog() {
+  // Belt-and-suspenders: if the log goes silent for 3 minutes straight (a
+  // stuck socket read on the device side, a dropped connection the
+  // browser doesn't notice), stop waiting instead of leaving the modal
+  // looking frozen forever -- the server-side attempt may still finish on
+  // its own, this only stops the browser from watching it. Re-armed on
+  // every message received, so a normally slow-but-progressing sync
+  // (several devices, a big device) never trips it.
+  if (syncWatchdog) { clearTimeout(syncWatchdog); }
+  syncWatchdog = setTimeout(function() {
+    finishSync('Sin respuesta del servidor por más de 3 minutos seguidos. Puede que el dispositivo esté colgado a nivel de red -- revisa su estado más abajo en unos minutos, o inténtalo de nuevo.');
+  }, 180000);
+}
 function startSync(url, title) {
   openSyncModal('Sincronizando: ' + title);
   var es = new EventSource(url);
+  syncEventSource = es;
+  armWatchdog();
   es.addEventListener('progress', function(e) {
     var data = JSON.parse(e.data);
     appendSyncLog(data.message);
+    armWatchdog();
   });
   es.addEventListener('done', function(e) {
     var data = JSON.parse(e.data);
@@ -110,18 +139,12 @@ function startSync(url, title) {
     } else {
       msg = 'Listo.';
     }
-    appendSyncLog(msg);
-    document.getElementById('sync-modal-result').textContent = msg;
-    document.getElementById('sync-modal-close').disabled = false;
-    es.close();
+    finishSync(msg);
   });
   es.addEventListener('error', function(e) {
     var msg = 'Se cortó la conexión con el servidor durante la sincronización.';
     try { msg = 'Error: ' + JSON.parse(e.data).message; } catch (err) { /* connection-level error, no JSON payload */ }
-    appendSyncLog(msg);
-    document.getElementById('sync-modal-result').textContent = msg;
-    document.getElementById('sync-modal-close').disabled = false;
-    es.close();
+    finishSync(msg);
   });
 }
 function confirmClearDevice(form, deviceName) {
