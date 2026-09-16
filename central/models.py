@@ -114,7 +114,12 @@ class AuditLog(Base):
     __tablename__ = "audit_log"
 
     id = Column(Integer, primary_key=True)
-    timestamp = Column(DateTime, default=utcnow, nullable=False)
+    # Deliberately the server's LOCAL clock, not UTC (unlike every other
+    # timestamp in this file) -- this table exists for a person to read
+    # directly, and showing it 5 hours off from the Windows clock right in
+    # front of them (Peru is UTC-5) was confusing enough to get reported
+    # as a bug on its own.
+    timestamp = Column(DateTime, default=datetime.now, nullable=False)
     username = Column(String(64), nullable=True)  # null for a failed login with an unknown/bad username
     action = Column(String(64), nullable=False)  # e.g. 'login', 'login_failed', 'device_add', 'device_sync', ...
     target = Column(String(200), nullable=True)  # what it acted on, e.g. a device or employee name

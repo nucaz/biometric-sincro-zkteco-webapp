@@ -16,6 +16,7 @@ import sys
 import threading
 import time
 import uuid
+from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -141,6 +142,21 @@ _sync_jobs = {}
 _sync_jobs_lock = threading.Lock()
 SYNC_JOB_TTL_SECONDS = 3600  # prune finished jobs after an hour so this dict doesn't grow forever
 
+# sync_device()'s own retry loop is supposed to bound how long a device can
+# take (3 attempts x 20s timeout + delays, well under 2 minutes) -- but a
+# flaky device (seen for real against one K20) can make a pyzk socket call
+# hang past its own configured timeout instead of raising, which no amount
+# of retry logic inside sync_device() can protect against. This is the
+# actual ceiling: run the job on a small pool and give up on waiting for it
+# after HARD_SYNC_TIMEOUT_SECONDS no matter what, so a job ALWAYS resolves
+# to done/error within a bounded time and the browser is never left polling
+# a "running" status forever. Python can't forcibly kill the underlying
+# thread if it's truly stuck in a blocking call, so a hung one leaks (it
+# will die with the process) -- max_workers is generous specifically so a
+# few of those in the background can't starve out real work.
+_sync_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sync-job")
+HARD_SYNC_TIMEOUT_SECONDS = 150
+
 
 def _prune_sync_jobs():
     cutoff = time.time() - SYNC_JOB_TTL_SECONDS
@@ -149,10 +165,10 @@ def _prune_sync_jobs():
 
 
 def _start_sync_job(worker):
-    """Runs `worker(progress, ctx)` in a background thread and returns a
-    job id the browser can poll via /sync/status/<job_id>. `ctx` is a
-    snapshot from _audit_context(), since the background thread has no
-    Flask request context of its own to read flask_session/request from."""
+    """Runs `worker(progress, ctx)` on the shared sync thread pool and
+    returns a job id the browser can poll via /sync/status/<job_id>. `ctx`
+    is a snapshot from _audit_context(), since that thread has no Flask
+    request context of its own to read flask_session/request from."""
     ctx = _audit_context()
     job_id = uuid.uuid4().hex
     with _sync_jobs_lock:
@@ -166,9 +182,16 @@ def _start_sync_job(worker):
                 job["messages"].append(msg)
 
     def run():
+        future = _sync_executor.submit(worker, progress, ctx)
         try:
-            result = worker(progress, ctx)
+            result = future.result(timeout=HARD_SYNC_TIMEOUT_SECONDS)
             status, payload = "done", result
+        except FuturesTimeoutError:
+            status, payload = "error", {
+                "message": f"Sin respuesta del dispositivo tras {HARD_SYNC_TIMEOUT_SECONDS} segundos -- "
+                           "probablemente un problema de red con ese equipo, no de la aplicación. "
+                           "El intento se abandonó aquí; puede seguir colgado en el servidor hasta que se reinicie el servicio."
+            }
         except Exception as e:
             status, payload = "error", {"message": str(e)}
         with _sync_jobs_lock:

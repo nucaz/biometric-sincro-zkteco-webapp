@@ -14,6 +14,11 @@
 .PARAMETER AdminUser / AdminPassword
   If given, creates the first super-admin account non-interactively.
 
+.PARAMETER SyncTime
+  Time of day (24h, "HH:mm") the automatic device sync runs, once daily.
+  Default 23:00 (outside work hours) -- the "Sincronizar" buttons in the
+  panel still work on demand any time regardless of this schedule.
+
 .EXAMPLE
   .\deploy\windows_server\install.ps1 -AdminUser admin -AdminPassword "clave-fuerte"
 
@@ -27,7 +32,8 @@ param(
     [string]$DatabaseUrl = "",
     [string]$AdminUser = "",
     [string]$AdminPassword = "",
-    [string]$InstallDir = "C:\Asistencia"
+    [string]$InstallDir = "C:\Asistencia",
+    [string]$SyncTime = "23:00"
 )
 
 $ErrorActionPreference = "Continue"  # native commands log to stderr; check exit codes explicitly instead
@@ -137,8 +143,10 @@ Register-ScheduledTask -TaskName "AsistenciaWeb" -Action $WebAction -Trigger $We
 
 $SyncAction = New-ScheduledTaskAction -Execute "$InstallDir\venv\Scripts\python.exe" `
     -Argument "-m central.sync" -WorkingDirectory $InstallDir
-$SyncTrigger = New-ScheduledTaskTrigger -Once -At (Get-Date) -RepetitionInterval (New-TimeSpan -Minutes 15)
-$SyncTrigger.Repetition.Duration = ""  # empty string = repeat indefinitely (Task Scheduler has no direct "forever" option)
+# Once a day, outside work hours by default -- the "Sincronizar" buttons
+# in the panel already cover on-demand syncing any time; this is just the
+# safety net so nothing goes more than a day without a pull.
+$SyncTrigger = New-ScheduledTaskTrigger -Daily -At $SyncTime
 Register-ScheduledTask -TaskName "AsistenciaSync" -Action $SyncAction -Trigger $SyncTrigger `
     -User "SYSTEM" -RunLevel Highest -Force | Out-Null
 
