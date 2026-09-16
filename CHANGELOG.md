@@ -34,11 +34,14 @@ para el procedimiento completo de release.
   transferencias grandes o de red inestable: ahora reintenta hasta 3
   veces con timeout ampliado, y una falla al desconectar ya no tapa el
   error real ni aborta la sincronización completa.
-- La ventana de progreso de sincronización podía quedar trancada sin
-  forma de cerrarla si el dispositivo se colgaba a nivel de red (el botón
-  "Cerrar" se deshabilitaba hasta recibir una señal que a veces nunca
-  llegaba). Ahora siempre se puede cerrar, y tanto el navegador como el
-  servidor dejan de esperar solos tras 3 minutos de silencio. También se
+- La ventana de progreso de sincronización se quedaba trancada sin forma
+  de cerrarla ni mostrar ningún avance (se basaba en una conexión larga
+  tipo Server-Sent Events, y algo entre el servidor y el navegador podía
+  retener el primer mensaje indefinidamente). Reemplazada por un diseño
+  mucho más simple y robusto: la sincronización corre como un trabajo en
+  segundo plano con un identificador, y el navegador consulta su estado
+  cada segundo con peticiones cortas normales -- "Cerrar" ya no depende
+  de ninguna conexión, siempre funciona al instante. También se
   aumentaron los hilos del servidor (waitress/gunicorn) para que una
   sincronización lenta no deje el resto de la aplicación sin responder.
 - La `SECRET_KEY` ya no se regenera en cada actualización del servidor
