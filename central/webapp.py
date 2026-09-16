@@ -12,7 +12,9 @@ import csv
 import io
 import json
 import os
+import queue
 import sys
+import threading
 from datetime import datetime, timedelta
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -21,7 +23,7 @@ if PROJECT_ROOT not in sys.path:
 
 from flask import (
     Flask, render_template, request, redirect, url_for, session as flask_session,
-    Response, flash
+    Response, flash, stream_with_context
 )
 from zk import const as zk_const
 
@@ -97,6 +99,54 @@ def _audit(db, action, target=None, detail=None, username=None):
         ip=ip, hostname=hostname, user_agent=user_agent,
     )
     db.commit()
+
+
+def _audit_context():
+    """Snapshot of who's making this request, as plain values -- pass this
+    into a background thread instead of calling _audit() there directly,
+    since flask.session/request only exist on the request thread that
+    started them, not on a worker thread spawned from it."""
+    return {
+        "username": flask_session.get("username"),
+        "ip": flask_session.get("client_ip") or client_ip(),
+        "hostname": flask_session.get("client_hostname"),
+        "user_agent": flask_session.get("client_user_agent") or client_user_agent(),
+    }
+
+
+def _sse_stream(worker):
+    """Runs `worker(progress, ctx)` in a background thread (ctx = a dict
+    from _audit_context(), since that thread has no request context of its
+    own) and yields its progress(...) calls as Server-Sent Events in real
+    time, ending with one 'done' or 'error' event. Used to drive the live
+    sync progress view instead of the browser just hanging on a blocked
+    request for a minute or two with no feedback."""
+    ctx = _audit_context()
+    q = queue.Queue()
+
+    def run():
+        def progress(msg):
+            q.put(("progress", msg))
+        try:
+            result = worker(progress, ctx)
+            q.put(("done", result))
+        except Exception as e:
+            q.put(("error", str(e)))
+
+    threading.Thread(target=run, daemon=True).start()
+
+    def generate():
+        while True:
+            kind, payload = q.get()
+            data = json.dumps(payload) if not isinstance(payload, str) else json.dumps({"message": payload})
+            yield f"event: {kind}\ndata: {data}\n\n"
+            if kind in ("done", "error"):
+                break
+
+    return Response(
+        stream_with_context(generate()), mimetype="text/event-stream",
+        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
+    )
 
 
 # ---------------------------------------------------------------- auth ----
@@ -559,7 +609,9 @@ def devices_status():
 def sync_now():
     """Manual trigger for the same pull that central.sync does on a
     schedule -- runs inline, so it blocks until every active device has
-    been polled (can take a minute or two with a lot of history)."""
+    been polled (can take a minute or two with a lot of history). Kept as
+    a plain form-POST fallback; the "Sincronizar todos" button in the UI
+    uses /sync/stream instead, for live progress."""
     results = sync_all()
     summary = "; ".join(f"{name}: {result}" for name, result in results.items())
     db = SessionLocal()
@@ -569,6 +621,25 @@ def sync_now():
         db.close()
     flash(f"Sincronización completa. {summary}")
     return redirect(url_for("devices_status"))
+
+
+@app.route("/sync/stream")
+@admin_required
+def sync_all_stream():
+    """Same as /sync but streams live progress as Server-Sent Events --
+    what the "Sincronizar todos" button actually calls, so the browser
+    shows what's happening instead of just hanging for a minute or two."""
+    def worker(progress, ctx):
+        results = sync_all(progress=progress)
+        summary = "; ".join(f"{name}: {result}" for name, result in results.items())
+        db = SessionLocal()
+        try:
+            log_event(db, "sync_all", detail=summary, **ctx)
+            db.commit()
+        finally:
+            db.close()
+        return {"summary": summary, "results": results}
+    return _sse_stream(worker)
 
 
 @app.route("/devices/<int:device_pk>/sync", methods=["POST"])
@@ -591,6 +662,32 @@ def device_sync_one(device_pk):
         return redirect(url_for("devices_status"))
     finally:
         db.close()
+
+
+@app.route("/devices/<int:device_pk>/sync/stream")
+@admin_required
+def device_sync_stream(device_pk):
+    """Same as /devices/<id>/sync but streams live progress -- what the
+    "Sincronizar este" button actually calls."""
+    def worker(progress, ctx):
+        db = SessionLocal()
+        try:
+            device = db.get(Device, device_pk)
+            if not device:
+                raise RuntimeError("Dispositivo no encontrado.")
+            try:
+                count = sync_device(db, device, progress=progress)
+                log_event(db, "device_sync", target=device.name, detail=f"{count} registro(s) nuevo(s)", **ctx)
+                db.commit()
+                return {"device": device.name, "count": count}
+            except Exception as e:
+                db.rollback()
+                log_event(db, "device_sync", target=device.name, detail=f"ERROR: {e}", **ctx)
+                db.commit()
+                raise
+        finally:
+            db.close()
+    return _sse_stream(worker)
 
 
 @app.route("/devices/new", methods=["GET", "POST"])
@@ -773,6 +870,40 @@ def device_poweroff(device_pk):
         except Exception as e:
             _audit(db, "device_poweroff", target=device.name, detail=f"ERROR: {e}")
             flash(f"Error al apagar '{device.name}': {e}")
+        return redirect(url_for("devices_status"))
+    finally:
+        db.close()
+
+
+@app.route("/devices/<int:device_pk>/clear_attendance", methods=["POST"])
+@admin_required
+def device_clear_attendance(device_pk):
+    """Wipes the punches stored ON THE PHYSICAL TERMINAL so it starts
+    accumulating from zero -- does NOT touch attendance_log in the central
+    database (that history stays exactly as it is). Requires typing the
+    device's name to confirm (see devices.html) since it's irreversible on
+    the device side."""
+    db = SessionLocal()
+    try:
+        device = db.get(Device, device_pk) or abort_404()
+        if request.form.get("confirm_name", "").strip() != device.name:
+            flash(f"El nombre escrito no coincide con '{device.name}' -- no se vació nada.")
+            return redirect(url_for("devices_status"))
+        system = _connect_to(device)
+        system.connect()
+        if not system.conn:
+            flash(f"No se pudo conectar a '{device.name}' para vaciarlo.")
+            return redirect(url_for("devices_status"))
+        try:
+            system.clear_attendance_log()
+            _audit(db, "device_clear_attendance", target=device.name,
+                   detail="marcaciones borradas del equipo (el historial central se conserva)")
+            flash(f"'{device.name}' vaciado: sus marcaciones se borraron del equipo. El historial ya sincronizado en el panel se conserva intacto.")
+        except Exception as e:
+            _audit(db, "device_clear_attendance", target=device.name, detail=f"ERROR: {e}")
+            flash(f"Error al vaciar '{device.name}': {e}")
+        finally:
+            system.disconnect()
         return redirect(url_for("devices_status"))
     finally:
         db.close()

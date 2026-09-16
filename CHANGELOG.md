@@ -15,6 +15,12 @@ para el procedimiento completo de release.
 - Log de auditoría (`/audit`, solo super admin): conexiones (login, 2FA,
   ping/probar conexión) y cambios (dispositivos, empleados, cuentas,
   backup), con IP y nombre de PC (mejor esfuerzo, por DNS inverso).
+- Progreso en vivo al sincronizar (una sola vez o todos los dispositivos):
+  ventana con el avance real (conectando, descargando, guardando) y el
+  total de registros nuevos al terminar, en vez de un botón "colgado".
+- Botón "Vaciar dispositivo": borra las marcaciones guardadas en el reloj
+  físico para que empiece de cero, sin tocar el historial ya sincronizado
+  en la base central. Pide escribir el nombre del equipo para confirmar.
 - Bloqueo de cuenta tras 3 intentos fallidos de inicio de sesión seguidos
   -- solo un super administrador puede desbloquearla, desde Cuentas.
 - Interruptores de emergencia (`.bat`) para iniciar/detener/reiniciar el

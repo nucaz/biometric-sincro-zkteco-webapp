@@ -26,14 +26,25 @@ MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 3
 
 
-def sync_device(session, device: Device) -> int:
-    """Pull all punches currently on `device` and insert the ones we don't
-    already have. Returns how many new rows were inserted. Retries a couple
-    of times on transient protocol errors (e.g. "TCP packet invalid")
-    before giving up and recording the failure."""
+def _noop(msg):
+    pass
+
+
+def sync_device(session, device: Device, progress=None) -> int:
+    """Pull all punches currently on `device` (always the device's FULL
+    current log -- the ZK protocol has no "since X" query, there's nothing
+    partial to ask for) and insert the ones not already in the central DB.
+    Returns how many new rows were inserted. Retries a couple of times on
+    transient protocol errors (e.g. "TCP packet invalid") before giving up
+    and recording the failure. `progress(msg)`, if given, is called with a
+    short status line at each stage -- used to drive the live progress
+    view in the web panel."""
+    progress = progress or _noop
     raw = None
     last_error = None
     for attempt in range(1, MAX_ATTEMPTS + 1):
+        prefix = f"(intento {attempt}/{MAX_ATTEMPTS}) " if attempt > 1 else ""
+        progress(f"{prefix}Conectando a '{device.name}' ({device.ip}:{device.port})...")
         system = ZKTecoAttendance(
             device.ip, port=device.port, password=device.comm_password or 0,
             timeout=SYNC_TIMEOUT_SECONDS,
@@ -43,6 +54,7 @@ def sync_device(session, device: Device) -> int:
             if not system.conn:
                 last_error = "Connection failed"
                 raise RuntimeError(last_error)
+            progress(f"Conectado. Descargando marcaciones de '{device.name}'... (puede tardar según cuántas tenga)")
             raw = system.get_raw_attendance(device_name=device.name)
             model = system.device_info.get('model', '').strip()
             if model and model != device.model:
@@ -51,6 +63,7 @@ def sync_device(session, device: Device) -> int:
             break
         except Exception as e:
             last_error = str(e)
+            progress(f"Error en el intento {attempt}: {last_error}")
         finally:
             system.disconnect()
         if attempt < MAX_ATTEMPTS:
@@ -63,10 +76,14 @@ def sync_device(session, device: Device) -> int:
         raise RuntimeError(last_error)
 
     if raw is None or raw.empty:
+        progress(f"'{device.name}' no tiene marcaciones nuevas que descargar (0 en el dispositivo o ya estaban todas).")
         device.last_synced_at = utcnow()
         device.last_sync_status = "OK - 0 new records"
         session.commit()
         return 0
+
+    total_pulled = len(raw)
+    progress(f"Descargadas {total_pulled} marcación(es) de '{device.name}'. Comparando contra la base central para no duplicar...")
 
     min_ts, max_ts = raw['timestamp'].min(), raw['timestamp'].max()
     existing = session.query(AttendanceLog.device_user_id, AttendanceLog.timestamp).filter(
@@ -93,22 +110,26 @@ def sync_device(session, device: Device) -> int:
         ))
 
     if new_rows:
+        progress(f"Guardando {len(new_rows)} registro(s) nuevo(s) en la base central...")
         session.bulk_save_objects(new_rows)
     device.last_synced_at = utcnow()
     device.last_sync_status = f"OK - {len(new_rows)} new records"
     session.commit()
+    progress(f"Listo: {len(new_rows)} nuevo(s) de {total_pulled} descargado(s) del dispositivo.")
     return len(new_rows)
 
 
-def sync_all() -> dict:
+def sync_all(progress=None) -> dict:
+    progress = progress or _noop
     init_db()
     session = SessionLocal()
     results = {}
     try:
         devices = session.query(Device).filter(Device.active == 1).all()
-        for device in devices:
+        for i, device in enumerate(devices, start=1):
+            progress(f"[{i}/{len(devices)}] Sincronizando '{device.name}'...")
             try:
-                count = sync_device(session, device)
+                count = sync_device(session, device, progress=progress)
                 results[device.name] = f"{count} new records"
             except Exception as e:
                 session.rollback()
@@ -116,6 +137,7 @@ def sync_all() -> dict:
                 device.last_sync_status = f"Error: {e}"
                 session.commit()
                 results[device.name] = f"ERROR: {e}"
+                progress(f"'{device.name}' falló: {e}")
     finally:
         session.close()
     return results

@@ -45,6 +45,10 @@
   .status-dot.ok { background: #16a34a; }
   .status-dot.bad { background: #dc2626; }
   footer.app-footer { text-align: center; padding: 24px 12px; color: #9ca3af; font-size: 12px; }
+  .sync-modal { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: center; justify-content: center; z-index: 1000; padding: 16px; box-sizing: border-box; }
+  .sync-modal-box { background: #fff; border-radius: 8px; padding: 20px; width: 100%; max-width: 480px; max-height: 85vh; display: flex; flex-direction: column; gap: 12px; box-shadow: 0 10px 30px rgba(0,0,0,.3); }
+  .sync-modal-log { background: #111827; color: #86efac; font-family: Consolas, monospace; font-size: 12px; padding: 10px; border-radius: 4px; overflow-y: auto; max-height: 260px; white-space: pre-wrap; min-height: 60px; }
+  .sync-modal-result { font-size: 14px; font-weight: 600; color: #1f2937; }
 </style>
 </head>
 <body>

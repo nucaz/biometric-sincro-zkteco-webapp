@@ -34,8 +34,11 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     estilo, filtros y auto-ancho) o PDF (con encabezado, franjas y pie de
     página con paginación).
   - **Dispositivos**: tarjetas por equipo (no una tabla apretada) con
-    Editar, Usuarios, Probar conexión, Ping, Reiniciar y Apagar — más un
-    botón "Sincronizar ahora" para no depender de la tarea programada.
+    Editar, Usuarios, Probar conexión, Ping, Reiniciar, Apagar y **Vaciar
+    dispositivo** — más "Sincronizar todos"/"Sincronizar este", que abren
+    una ventana con el progreso en vivo (conectando, descargando,
+    guardando, y cuántos registros nuevos al terminar) en vez de dejar el
+    botón "colgado" sin feedback.
   - **Usuarios de un dispositivo** (`/devices/<id>/users`): lista en vivo
     quién está enrolado en ESE reloj físico, con alta/edición/baja directa
     (busca por ID/DNI, apellido o código) — escribe en el equipo real vía
@@ -145,6 +148,26 @@ y en `sync.py` (reintenta hasta 3 veces con un timeout de 20s para la
 descarga masiva, en vez de los 5s por defecto de una conexión rápida).
 Confirmado con una sincronización real contra PISO2: 102 marcaciones
 nuevas, sin error, tras timeouts previos en el mismo dispositivo.
+
+## Sincronización: siempre trae el historial completo del reloj, nunca solo "lo nuevo"
+
+El protocolo ZK (pyzk) no tiene un comando "dame solo las marcaciones desde
+tal fecha" -- `get_attendance()` siempre devuelve TODO lo que el reloj
+tiene guardado en ese momento. Lo "incremental" pasa del lado de la base
+central: cada corrida compara lo descargado contra lo que ya existe
+(por dispositivo + id + fecha/hora exacta) e inserta solo lo que falta.
+En la práctica esto ya equivale a una "sincronización completa" cada vez
+que se corre -- no hace falta un botón aparte para eso.
+
+## Vaciar un dispositivo (empezar de cero)
+
+Botón **Vaciar dispositivo** en cada tarjeta (pide escribir el nombre
+exacto del equipo para confirmar, es irreversible del lado del reloj).
+Borra las marcaciones guardadas EN EL EQUIPO -- el historial que ya está
+en `attendance_log` **no se toca**. Útil para no acumular años de datos en
+la memoria del reloj sin perder nada de lo ya sincronizado. Los usuarios
+enrolados (huellas/tarjetas) no se ven afectados, solo el registro de
+marcaciones.
 
 ## Pendiente para producción real
 

@@ -78,6 +78,18 @@ class ZKTecoAttendance:
         self.users = {}
         self.device_info = {}
 
+    def clear_attendance_log(self):
+        """Wipe every punch stored ON THE DEVICE ITSELF. Irreversible on
+        the device side -- there is no undo. Does NOT touch enrolled users
+        (fingerprints/cards stay) and has no effect at all on whatever is
+        already saved in the central database, which is the whole point:
+        this only resets what the terminal has to re-send next time, so it
+        starts accumulating from zero without losing the history already
+        synced centrally."""
+        if not self.conn:
+            raise RuntimeError("Not connected to device. Please connect first.")
+        self.conn.clear_attendance()
+
     def load_device_info(self):
         """Read model/serial/firmware info reported by the device itself."""
         if not self.conn:

@@ -5,9 +5,7 @@
   <span class="muted">Cada dispositivo se identifica por su número de serie (o ip:puerto si aún no se ha probado la conexión) — así renombrarlo o cambiarle la IP nunca pierde su historial.</span>
   {% if can_manage %}
   <div style="display:flex; gap:8px; flex-shrink:0;">
-    <form method="post" action="{{ url_for('sync_now') }}" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Sincronizando... puede tardar un par de minutos';">
-      <button type="submit">Sincronizar todos</button>
-    </form>
+    <button type="button" onclick="startSync('{{ url_for('sync_all_stream') }}', 'todos los dispositivos')">Sincronizar todos</button>
     <a class="btn" href="{{ url_for('device_new') }}">+ Agregar dispositivo</a>
   </div>
   {% endif %}
@@ -38,10 +36,8 @@
     <div class="btn-group">
       <form method="post" action="{{ url_for('device_test', device_pk=d.id) }}"><button type="submit">Probar conexión</button></form>
       <form method="post" action="{{ url_for('device_ping', device_pk=d.id) }}"><button type="submit" class="secondary" style="background:#0891b2;">Ping</button></form>
-      <form method="post" action="{{ url_for('device_sync_one', device_pk=d.id) }}"
-            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Sincronizando...';">
-        <button type="submit" class="secondary" style="background:#7c3aed;">Sincronizar este</button>
-      </form>
+      <button type="button" class="secondary" style="background:#7c3aed;"
+              onclick="startSync('{{ url_for('device_sync_stream', device_pk=d.id) }}', '{{ d.name }}')">Sincronizar este</button>
     </div>
     <div class="btn-group">
       <form method="post" action="{{ url_for('device_restart', device_pk=d.id) }}"
@@ -57,10 +53,89 @@
         <button type="submit" class="btn danger">Eliminar</button>
       </form>
     </div>
+    <div class="btn-group">
+      <form method="post" action="{{ url_for('device_clear_attendance', device_pk=d.id) }}"
+            onsubmit="return confirmClearDevice(this, '{{ d.name }}');">
+        <input type="hidden" name="confirm_name" value="">
+        <button type="submit" class="btn danger" title="Borra las marcaciones guardadas EN EL EQUIPO para que empiece de cero. El historial ya sincronizado en este panel no se toca.">Vaciar dispositivo</button>
+      </form>
+    </div>
     {% endif %}
   </div>
   {% else %}
   <p class="muted">No hay dispositivos registrados.</p>
   {% endfor %}
 </div>
+
+<div id="sync-modal" class="sync-modal" hidden>
+  <div class="sync-modal-box">
+    <h3 id="sync-modal-title" style="margin:0;">Sincronizando...</h3>
+    <div id="sync-modal-log" class="sync-modal-log"></div>
+    <div id="sync-modal-result" class="sync-modal-result"></div>
+    <button id="sync-modal-close" class="btn secondary" onclick="closeSyncModal()" disabled>Cerrar</button>
+  </div>
+</div>
+
+<script>
+function openSyncModal(title) {
+  document.getElementById('sync-modal-title').textContent = title;
+  document.getElementById('sync-modal-log').textContent = '';
+  document.getElementById('sync-modal-result').textContent = '';
+  document.getElementById('sync-modal-close').disabled = true;
+  document.getElementById('sync-modal').hidden = false;
+}
+function closeSyncModal() {
+  document.getElementById('sync-modal').hidden = true;
+  location.reload();
+}
+function appendSyncLog(msg) {
+  var log = document.getElementById('sync-modal-log');
+  log.textContent += msg + "\n";
+  log.scrollTop = log.scrollHeight;
+}
+function startSync(url, title) {
+  openSyncModal('Sincronizando: ' + title);
+  var es = new EventSource(url);
+  es.addEventListener('progress', function(e) {
+    var data = JSON.parse(e.data);
+    appendSyncLog(data.message);
+  });
+  es.addEventListener('done', function(e) {
+    var data = JSON.parse(e.data);
+    var msg;
+    if (typeof data.count !== 'undefined') {
+      msg = 'Listo: ' + data.count + ' registro(s) nuevo(s) en \'' + data.device + '\'.';
+    } else if (typeof data.summary !== 'undefined') {
+      msg = 'Listo. ' + data.summary;
+    } else {
+      msg = 'Listo.';
+    }
+    appendSyncLog(msg);
+    document.getElementById('sync-modal-result').textContent = msg;
+    document.getElementById('sync-modal-close').disabled = false;
+    es.close();
+  });
+  es.addEventListener('error', function(e) {
+    var msg = 'Se cortó la conexión con el servidor durante la sincronización.';
+    try { msg = 'Error: ' + JSON.parse(e.data).message; } catch (err) { /* connection-level error, no JSON payload */ }
+    appendSyncLog(msg);
+    document.getElementById('sync-modal-result').textContent = msg;
+    document.getElementById('sync-modal-close').disabled = false;
+    es.close();
+  });
+}
+function confirmClearDevice(form, deviceName) {
+  var typed = prompt(
+    'Esto borra TODAS las marcaciones guardadas EN EL EQUIPO "' + deviceName + '" para que empiece a registrar desde cero.\n\n' +
+    'El historial que ya está sincronizado en este panel NO se toca -- pero lo que se borre del equipo y nunca se haya sincronizado se pierde para siempre.\n\n' +
+    'Escribe el nombre exacto del dispositivo para confirmar:'
+  );
+  if (typed !== deviceName) {
+    if (typed !== null) alert('El nombre no coincide. No se vació nada.');
+    return false;
+  }
+  form.querySelector('input[name="confirm_name"]').value = typed;
+  return true;
+}
+</script>
 {% endblock %}
