@@ -58,7 +58,7 @@ def _pull_raw_with_retry(device: Device, progress=None):
             try:
                 system.connect()
                 if not system.conn:
-                    last_error = "Connection failed"
+                    last_error = system.last_connect_error or "Connection failed"
                     raise RuntimeError(last_error)
                 progress(f"Conectado. Descargando marcaciones de '{device.name}'... (puede tardar según cuántas tenga)")
                 raw = system.get_raw_attendance(device_name=device.name)

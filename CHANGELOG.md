@@ -78,6 +78,18 @@ para el procedimiento completo de release.
   una operación en curso contra él, un segundo intento se avisa al
   instante ("ya tiene otra operación en curso") en vez de sumarse a la
   contienda.
+- **Causa raíz encontrada para "Connection failed" en el panel cuando la
+  app de escritorio sí conectaba al mismo equipo**: antes de hablar el
+  protocolo ZK, pyzk hace un `ping` real del sistema operativo al
+  dispositivo y aborta si no hay respuesta -- aunque el puerto TCP 4370
+  sí esté abierto y disponible. En una red con ICMP filtrado entre el
+  servidor y la subred de un dispositivo (común en redes segmentadas
+  por firewall) esto produce un falso "no se pudo conectar" incluso con
+  el equipo perfectamente accesible por TCP. Ahora se omite ese ping
+  interno (`ommit_ping=True`) ya que la propia app ya verifica el
+  puerto TCP por su cuenta. De paso, el motivo real de una conexión
+  fallida (antes descartado y solo impreso en la consola del servidor)
+  ahora se guarda y se muestra en el mensaje de error / auditoría.
 
 ## [1.0.0] - 2026-09-15
 

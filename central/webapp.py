@@ -972,7 +972,7 @@ def device_restart(device_pk):
         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            raise RuntimeError("no se pudo conectar")
+            raise RuntimeError(system.last_connect_error or "no se pudo conectar")
         try:
             system.restart_device()
         finally:
@@ -1006,7 +1006,7 @@ def device_poweroff(device_pk):
         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            raise RuntimeError("no se pudo conectar")
+            raise RuntimeError(system.last_connect_error or "no se pudo conectar")
         try:
             system.poweroff_device()
         finally:
@@ -1048,7 +1048,7 @@ def device_clear_attendance(device_pk):
         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            raise RuntimeError("no se pudo conectar")
+            raise RuntimeError(system.last_connect_error or "no se pudo conectar")
         try:
             system.clear_attendance_log()
         finally:
@@ -1149,7 +1149,7 @@ def device_user_new(device_pk):
                 system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
                 system.connect()
                 if not system.conn:
-                    raise RuntimeError("no se pudo conectar")
+                    raise RuntimeError(system.last_connect_error or "no se pudo conectar")
                 try:
                     return system.create_or_update_user(
                         user_id=user_id, name=name, privilege=privilege,
@@ -1208,7 +1208,7 @@ def device_user_edit(device_pk, user_id):
                 system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
                 system.connect()
                 if not system.conn:
-                    raise RuntimeError("no se pudo conectar")
+                    raise RuntimeError(system.last_connect_error or "no se pudo conectar")
                 try:
                     system.create_or_update_user(
                         user_id=user_id, name=name, privilege=privilege,
@@ -1244,7 +1244,7 @@ def device_user_edit(device_pk, user_id):
             system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
             system.connect()
             if not system.conn:
-                raise RuntimeError("no se pudo conectar")
+                raise RuntimeError(system.last_connect_error or "no se pudo conectar")
             try:
                 return next((u for u in system.list_device_users() if str(u['user_id']) == str(user_id)), None)
             finally:
@@ -1281,7 +1281,7 @@ def device_user_delete(device_pk, user_id):
         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            raise RuntimeError("no se pudo conectar")
+            raise RuntimeError(system.last_connect_error or "no se pudo conectar")
         try:
             system.delete_device_user(user_id)
         finally:
@@ -1418,7 +1418,7 @@ def employee_edit(employee_id):
                         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
                         system.connect()
                         if not system.conn:
-                            raise RuntimeError("no se pudo conectar")
+                            raise RuntimeError(system.last_connect_error or "no se pudo conectar")
                         try:
                             system.create_or_update_user(user_id=device_user_id, name=new_name)
                         finally:

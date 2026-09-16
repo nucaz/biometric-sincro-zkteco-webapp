@@ -48,12 +48,24 @@ class ZKTecoAttendance:
         self.port = port
         self.timeout = timeout
         self.password = password
-        self.zk = ZK(self.ip_address, port=self.port, timeout=self.timeout, password=self.password)
+        # ommit_ping=True: pyzk's own connect() otherwise shells out to a
+        # real OS "ping" first and refuses to even try the ZK protocol if
+        # that ICMP ping doesn't get a reply -- independent of whether TCP
+        # port `port` itself is reachable. Confirmed in production: a
+        # device could be reached fine over TCP (our own check_network_reachable
+        # succeeds, a separate desktop instance connects to it without
+        # issue) while this ICMP pre-check still failed, most likely
+        # because ICMP is filtered on the path from the server to that
+        # device's subnet even though TCP 4370 isn't -- a common firewall
+        # policy, and one pyzk doesn't need to depend on for a TCP session.
+        self.zk = ZK(self.ip_address, port=self.port, timeout=self.timeout, password=self.password, ommit_ping=True)
         self.conn = None
         self.users = {}  # Cache for user information
         self.device_info = {}  # Cache for device model/serial/firmware
+        self.last_connect_error = None
 
     def connect(self):
+        self.last_connect_error = None
         try:
             self.conn = self.zk.connect()
             # Load user information
@@ -61,6 +73,7 @@ class ZKTecoAttendance:
             self.load_device_info()
             print(f"Successfully connected to device at {self.ip_address}")
         except Exception as e:
+            self.last_connect_error = str(e)
             print(f"Error connecting to device: {str(e)}")
             self.conn = None
 
