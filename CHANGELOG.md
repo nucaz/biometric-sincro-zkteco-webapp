@@ -46,6 +46,18 @@ para el procedimiento completo de release.
   sincronización lenta no deje el resto de la aplicación sin responder.
 - La `SECRET_KEY` ya no se regenera en cada actualización del servidor
   (antes cerraba la sesión de todos los usuarios activos).
+- Una sincronización podía quedar corriendo en el servidor sin límite si
+  el dispositivo se colgaba a nivel de socket más allá de su propio
+  timeout configurado (visto de verdad contra un K20 real) -- ahora hay
+  un tope duro de 150s por trabajo: siempre termina en "listo" o "error",
+  nunca se queda en "corriendo" para siempre.
+- El log de auditoría mostraba la hora en UTC en vez de la hora local del
+  servidor (5 horas de diferencia con Perú) -- ahora usa la hora local,
+  igual que el resto de la aplicación.
+- La sincronización automática pasó de cada 15 minutos a una vez por
+  noche (23:00 por defecto, configurable con `-SyncTime` en
+  `install.ps1`) -- los botones "Sincronizar" del panel siguen
+  funcionando al instante cuando se necesite durante el día.
 
 ## [1.0.0] - 2026-09-15
 
