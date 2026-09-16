@@ -24,6 +24,7 @@ def init_db():
     from . import models  # noqa: F401  (register models on Base before create_all)
     Base.metadata.create_all(engine)
     _migrate_add_user_lockout_columns()
+    _migrate_add_device_deleted_column()
 
 
 def _migrate_add_user_lockout_columns():
@@ -41,3 +42,18 @@ def _migrate_add_user_lockout_columns():
             conn.execute(text("ALTER TABLE users ADD COLUMN failed_login_attempts INTEGER NOT NULL DEFAULT 0"))
         if "locked" not in existing:
             conn.execute(text("ALTER TABLE users ADD COLUMN locked BOOLEAN NOT NULL DEFAULT FALSE"))
+
+
+def _migrate_add_device_deleted_column():
+    """Same as _migrate_add_user_lockout_columns, for devices.deleted --
+    needed so "Eliminar" on an already-running server can switch from
+    dropping a device's history to preserving it (see device_delete())
+    without losing anything already on disk."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    if "devices" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("devices")}
+    if "deleted" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE devices ADD COLUMN deleted BOOLEAN NOT NULL DEFAULT FALSE"))

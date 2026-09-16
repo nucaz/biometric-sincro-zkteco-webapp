@@ -125,7 +125,7 @@ def sync_all(progress=None) -> dict:
     session = SessionLocal()
     results = {}
     try:
-        devices = session.query(Device).filter(Device.active == 1).all()
+        devices = session.query(Device).filter(Device.active == 1, Device.deleted.is_(False)).all()
         for i, device in enumerate(devices, start=1):
             progress(f"[{i}/{len(devices)}] Sincronizando '{device.name}'...")
             try:

@@ -26,6 +26,7 @@ class Device(Base):
     terminal_no = Column(Integer, nullable=True)  # ZKTeco's own device-number label, informational only
     model = Column(String(64), nullable=True)
     active = Column(Integer, nullable=False, default=1)  # 1/0, avoid polling retired devices
+    deleted = Column(Boolean, nullable=False, default=False)  # hidden from the devices list/sync, but the row (and its history) is never actually dropped -- see device_delete()
     last_synced_at = Column(DateTime, nullable=True)
     last_sync_status = Column(Text, nullable=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)

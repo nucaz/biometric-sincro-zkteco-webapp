@@ -49,8 +49,8 @@
         <button type="submit" class="btn danger">Apagar</button>
       </form>
       <form method="post" action="{{ url_for('device_delete', device_pk=d.id) }}"
-            onsubmit="return confirm('¿Eliminar {{ d.name }}? Si tiene historial de marcaciones, se te pedirá confirmarlo aparte en Editar.');">
-        <button type="submit" class="btn danger">Eliminar</button>
+            onsubmit="return confirm('¿Eliminar {{ d.name }} de la lista? Su historial de marcaciones NO se borra -- se conserva en Marcaciones, y puedes restaurarlo después desde \'Ver eliminados\' más abajo.');">
+        <button type="submit" class="btn danger" title="Nunca borra el historial de marcaciones -- solo oculta el dispositivo y lo saca de la sincronización.">Eliminar</button>
       </form>
     </div>
     <div class="btn-group">
@@ -66,6 +66,27 @@
   <p class="muted">No hay dispositivos registrados.</p>
   {% endfor %}
 </div>
+
+{% if can_manage and deleted_devices %}
+<details style="margin-top:24px;">
+  <summary style="cursor:pointer; color:#6b7280; font-size:14px;">Ver eliminados ({{ deleted_devices|length }})</summary>
+  <div class="card-grid" style="margin-top:12px;">
+    {% for d in deleted_devices %}
+    <div class="device-card" style="opacity:.7;">
+      <h3>{{ d.name }} <span class="badge warn">eliminado</span></h3>
+      <dl class="meta">
+        <dt>Sede</dt><dd>{{ d.sede or '-' }}</dd>
+        <dt>IP</dt><dd>{{ d.ip }}:{{ d.port }}</dd>
+        <dt>Marcaciones conservadas</dt><dd>{{ deleted_log_counts.get(d.id, 0) }}</dd>
+      </dl>
+      <form method="post" action="{{ url_for('device_restore', device_pk=d.id) }}">
+        <button type="submit" class="btn secondary">Restaurar</button>
+      </form>
+    </div>
+    {% endfor %}
+  </div>
+</details>
+{% endif %}
 
 <div id="sync-modal" class="sync-modal" hidden>
   <div class="sync-modal-box">

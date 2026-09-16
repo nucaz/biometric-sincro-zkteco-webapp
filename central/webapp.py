@@ -28,6 +28,7 @@ from flask import (
     Response, flash
 )
 from zk import const as zk_const
+from sqlalchemy import func
 
 from attendance_system import ZKTecoAttendance, check_network_reachable
 from central.db import SessionLocal, init_db
@@ -669,8 +670,18 @@ def export_pdf():
 def devices_status():
     db = SessionLocal()
     try:
-        devices = db.query(Device).order_by(Device.name).all()
-        return render_template("devices.html", devices=devices)
+        devices = db.query(Device).filter(Device.deleted.is_(False)).order_by(Device.name).all()
+        deleted_devices = db.query(Device).filter(Device.deleted.is_(True)).order_by(Device.name).all()
+        deleted_log_counts = {
+            device_pk: count for device_pk, count in
+            db.query(AttendanceLog.device_pk, func.count(AttendanceLog.id))
+            .filter(AttendanceLog.device_pk.in_([d.id for d in deleted_devices]))
+            .group_by(AttendanceLog.device_pk).all()
+        } if deleted_devices else {}
+        return render_template(
+            "devices.html", devices=devices, deleted_devices=deleted_devices,
+            deleted_log_counts=deleted_log_counts,
+        )
     finally:
         db.close()
 
@@ -820,25 +831,35 @@ def device_edit(device_pk):
 @app.route("/devices/<int:device_pk>/delete", methods=["POST"])
 @admin_required
 def device_delete(device_pk):
+    """"Eliminar" never drops attendance_log/employee_map history and never
+    drops the devices row itself -- it hides the device from this list and
+    from sync (both manual and scheduled), same as unchecking 'Activo',
+    plus taking it out of view entirely. See /devices/<id>/restore to
+    bring it back."""
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
         history_count = db.query(AttendanceLog).filter(AttendanceLog.device_pk == device.id).count()
-        if history_count > 0 and not request.form.get("force"):
-            flash(
-                f"'{device.name}' tiene {history_count} marcación(es) en el historial. "
-                "Para no perder ese historial, esto NO se borra directo -- usa 'Editar' y desmarca "
-                "'Activo' para retirarlo sin perder datos. Si de verdad quieres borrar todo su historial "
-                "también, entra a Editar y usa 'Eliminar (borra también el historial)'."
-            )
-            return redirect(url_for("devices_status"))
-        device_name = device.name
-        db.query(EmployeeMap).filter(EmployeeMap.device_pk == device.id).delete()
-        db.query(AttendanceLog).filter(AttendanceLog.device_pk == device.id).delete()
-        db.delete(device)
+        device.deleted = True
+        device.active = 0
         db.commit()
-        _audit(db, "device_delete", target=device_name, detail=f"{history_count} marcación(es) borrada(s)")
-        flash(f"Dispositivo '{device.name}' eliminado.")
+        _audit(db, "device_delete", target=device.name, detail=f"oculto, {history_count} marcación(es) conservada(s) en el historial")
+        flash(f"'{device.name}' eliminado de la lista. Su historial ({history_count} marcación(es)) se conserva intacto en Marcaciones -- usa 'Ver eliminados' más abajo para restaurarlo si hace falta.")
+        return redirect(url_for("devices_status"))
+    finally:
+        db.close()
+
+
+@app.route("/devices/<int:device_pk>/restore", methods=["POST"])
+@admin_required
+def device_restore(device_pk):
+    db = SessionLocal()
+    try:
+        device = db.get(Device, device_pk) or abort_404()
+        device.deleted = False
+        db.commit()
+        _audit(db, "device_restore", target=device.name)
+        flash(f"'{device.name}' restaurado -- sigue inactivo (no se sincroniza) hasta que lo actives desde Editar.")
         return redirect(url_for("devices_status"))
     finally:
         db.close()
