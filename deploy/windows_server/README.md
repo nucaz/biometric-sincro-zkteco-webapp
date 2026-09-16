@@ -73,6 +73,42 @@ dímelo y lo reviso.
 Sin `-AdminUser`/`-AdminPassword`, el script te deja el comando exacto
 para crear la cuenta después.
 
+## Nombres de las tareas programadas
+
+`install.ps1` registra siempre estas dos, con estos nombres exactos
+(los verás así en el Programador de Tareas de Windows):
+
+| Tarea | Qué hace | Se reinicia sola si falla |
+|---|---|---|
+| `AsistenciaWeb` | Corre el panel web (`waitress`, puerto 5000) permanentemente | Sí -- hasta 999 veces, cada 1 minuto |
+| `AsistenciaSync` | Sincroniza los relojes cada 15 minutos | No aplica (corre y termina cada vez) |
+
+## Interruptor de emergencia: iniciar / detener / reiniciar
+
+En `deploy\windows_server\` (dentro de `C:\Asistencia` después de instalar)
+hay cuatro `.bat` de doble clic -- piden permisos de administrador solos
+cuando hace falta, y siempre imprimen el nombre de la tarea y su estado:
+
+| Archivo | Acción |
+|---|---|
+| `AsistenciaWeb_Estado.bat` | Muestra el estado de ambas tareas (no pide administrador) |
+| `AsistenciaWeb_Iniciar.bat` | Inicia `AsistenciaWeb` si estaba detenida |
+| `AsistenciaWeb_Detener.bat` | Detiene `AsistenciaWeb` (para mantenimiento) -- `AsistenciaSync` sigue su horario normal |
+| `AsistenciaWeb_Reiniciar.bat` | Detiene y vuelve a iniciar `AsistenciaWeb` -- úsalo después de una actualización o si el panel no responde |
+
+Por detrás, los cuatro llaman a
+[`service.ps1`](service.ps1) (`-Action Start|Stop|Restart|Status`), así
+que también se puede usar directo desde PowerShell como Administrador:
+
+```powershell
+.\deploy\windows_server\service.ps1 -Action Restart
+```
+
+Nota: `AsistenciaWeb` ya está configurada para reiniciarse sola (hasta
+999 veces, cada 1 minuto) si el proceso se cae solo -- estos botones son
+para cuando quieres forzarlo tú (después de actualizar, por ejemplo) o
+para pararlo a propósito durante mantenimiento.
+
 Si lo corres SIN privilegios de administrador, prepara todo igual (app,
 dependencias, base de datos, cuenta) pero se detiene antes de registrar
 las tareas programadas y te lo dice explícitamente -- vuelve a correrlo
