@@ -1,0 +1,57 @@
+name: Release desktop installer
+
+# Builds the Windows installer for the desktop app and publishes it as a
+# GitHub Release whenever a version tag (v1.2.3) is pushed. This is the
+# ONLY path that produces an official, distributable installer -- it runs
+# entirely from this repository's source, so a release always traces back
+# to a specific commit here.
+
+on:
+  push:
+    tags:
+      - "v*.*.*"
+
+permissions:
+  contents: write
+
+jobs:
+  build-and-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Verify tag matches VERSION file
+        shell: pwsh
+        run: |
+          $tagVersion = "${{ github.ref_name }}".TrimStart("v")
+          $fileVersion = (Get-Content VERSION -Raw).Trim()
+          if ($tagVersion -ne $fileVersion) {
+            throw "El tag v$tagVersion no coincide con el archivo VERSION ($fileVersion). Actualiza VERSION, haz commit, y vuelve a etiquetar."
+          }
+
+      - name: Create venv and install dependencies
+        shell: pwsh
+        run: |
+          python -m venv venv
+          .\venv\Scripts\python.exe -m pip install --upgrade pip
+          .\venv\Scripts\python.exe -m pip install -r requirements.txt pyinstaller
+
+      - name: Install Inno Setup
+        shell: pwsh
+        run: choco install innosetup -y --no-progress
+
+      - name: Build installer
+        shell: pwsh
+        run: .\deploy\windows_desktop\build.ps1
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist_installer/*.exe
+          generate_release_notes: true

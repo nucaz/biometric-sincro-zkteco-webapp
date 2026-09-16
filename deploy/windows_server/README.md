@@ -13,6 +13,57 @@ esta sesión no corre con privilegios de Administrador. Esa parte del
 script solo necesita permisos, no lógica nueva; si algo falla ahí,
 dímelo y lo reviso.
 
+## Requisitos previos
+
+- **Sistema operativo**: Windows Server 2016 o más nuevo (también corre
+  igual en Windows 10/11 para pruebas). El script usa `ScheduledTasks`,
+  que viene incluido de fábrica en todos ellos.
+- **Python 3.10 o superior** instalado en el servidor, con la casilla
+  **"Add python.exe to PATH"** marcada durante la instalación --
+  descárgalo de [python.org/downloads/windows](https://www.python.org/downloads/windows/).
+  El script llama a `python` desde PATH; si no lo encuentra, lo dice y se
+  detiene ahí mismo.
+- **PowerShell en modo Administrador** ("Ejecutar como administrador") --
+  sin esto, el script prepara todo (app, dependencias, base de datos,
+  cuenta) pero se detiene antes de dejar el servicio corriendo de verdad
+  (ver más abajo).
+- **Acceso de red desde el servidor a cada reloj biométrico**, normalmente
+  puerto `4370/TCP` -- si hay firewall entre el servidor y las sedes, ese
+  puerto tiene que estar abierto en ambos sentidos de la conexión que
+  inicia el servidor.
+- **Salida a internet** durante la instalación, para que `pip` descargue
+  las dependencias de [`central/requirements.txt`](../../central/requirements.txt)
+  (Flask, SQLAlchemy, pyzk, etc.). Si el servidor no tiene internet, arma
+  antes un *wheelhouse* offline (`pip download -r central\requirements.txt -d wheelhouse`
+  desde una máquina que sí lo tenga) y copia esa carpeta al servidor --
+  avísame si necesitas que adapte el script para instalar desde ahí.
+- **Puerto 5000 libre** en el servidor (el panel escucha ahí por
+  defecto) y, si vas a entrar desde otras PCs de la red, una regla de
+  entrada abierta en el Firewall de Windows Defender para ese puerto.
+- **(Opcional) PostgreSQL o MySQL ya instalado y accesible**, solo si NO
+  vas a usar SQLite (ver sección "Base de datos" más abajo). Este script
+  no instala el motor de base de datos en Windows.
+
+## Instalación paso a paso
+
+1. **Copia este repositorio al servidor** (clónalo con `git clone
+   https://github.com/nucaz/biometric-sincro-zkteco-webapp.git`, o baja
+   el ZIP desde GitHub y descomprímelo) -- puede quedar en cualquier
+   carpeta temporal, el instalador copia lo necesario a `C:\Asistencia`
+   por su cuenta.
+2. Abre **PowerShell como Administrador** y entra a la carpeta donde
+   quedó el repositorio.
+3. Corre el instalador (ver "Uso" abajo). La primera vez, dale también
+   `-AdminUser`/`-AdminPassword` para que te deje la cuenta de acceso ya
+   creada.
+4. Cuando termine, abre `http://localhost:5000` en ese mismo servidor
+   (o `http://<IP-del-servidor>:5000` desde otra PC de la red) e inicia
+   sesión con la cuenta que creaste.
+5. Desde el panel, ve a **Dispositivos → Agregar dispositivo** y carga
+   cada reloj (nombre, sede, IP, puerto, y comm key si el equipo la
+   tiene configurada) -- o usa "Probar conexión" para confirmar que cada
+   uno responde antes de esperar a la sincronización automática.
+
 ## Uso (PowerShell como Administrador)
 
 ```powershell

@@ -14,3 +14,32 @@ solo el instalador (`windows_desktop`) o el servicio ya corriendo
 nueva es editar el código fuente y volver a correr el script de build
 correspondiente. `VERSION` en la raíz del proyecto controla el número de
 versión del instalador de escritorio.
+
+## Cómo sacar una versión nueva
+
+Cada release del instalador de escritorio queda trazado a un commit
+concreto de este repositorio -- nunca se genera ni se distribuye a mano
+fuera de este flujo:
+
+1. Haz los cambios de código que correspondan y súbelos a `main`.
+2. Sube el número en [`VERSION`](../VERSION) (ej. `1.0.0` -> `1.1.0`).
+3. Agrega una entrada nueva en [`CHANGELOG.md`](../CHANGELOG.md) con lo
+   que cambió.
+4. Haz commit de `VERSION` + `CHANGELOG.md`.
+5. Etiqueta ese commit y súbelo:
+   ```bash
+   git tag v1.1.0
+   git push origin v1.1.0
+   ```
+6. El workflow [`release-desktop.yml`](../.github/workflows/release-desktop.yml)
+   se dispara solo: compila el instalador (PyInstaller + Inno Setup) en un
+   runner limpio de GitHub Actions -- no en tu PC -- y publica un
+   [Release](https://github.com/nucaz/biometric-sincro-zkteco-webapp/releases)
+   con el `.exe` adjunto. Si el tag no coincide con el `VERSION` del
+   commit, el build falla a propósito (evita publicar una versión mal
+   etiquetada).
+
+Los servidores (`windows_server` / `linux_server`) no usan tags todavía --
+se actualizan copiando el código más reciente de `main` y volviendo a
+correr el script de instalación (ver cada README). Si más adelante quieres
+versionar también el panel web por releases, lo agregamos igual.
