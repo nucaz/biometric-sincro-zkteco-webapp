@@ -5,7 +5,9 @@
   <span class="muted">Cada dispositivo se identifica por su número de serie (o ip:puerto si aún no se ha probado la conexión) — así renombrarlo o cambiarle la IP nunca pierde su historial.</span>
   {% if can_manage %}
   <div style="display:flex; gap:8px; flex-shrink:0;">
-    <button type="button" onclick="startSync('{{ url_for('sync_all_start') }}', 'todos los dispositivos')">Sincronizar todos</button>
+    <form method="post" action="{{ url_for('sync_now') }}" onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Sincronizando... puede tardar un par de minutos';">
+      <button type="submit">Sincronizar todos</button>
+    </form>
     <a class="btn" href="{{ url_for('device_new') }}">+ Agregar dispositivo</a>
   </div>
   {% endif %}
@@ -36,8 +38,10 @@
     <div class="btn-group">
       <form method="post" action="{{ url_for('device_test', device_pk=d.id) }}"><button type="submit">Probar conexión</button></form>
       <form method="post" action="{{ url_for('device_ping', device_pk=d.id) }}"><button type="submit" class="secondary" style="background:#0891b2;">Ping</button></form>
-      <button type="button" class="secondary" style="background:#7c3aed;"
-              onclick="startSync('{{ url_for('device_sync_start', device_pk=d.id) }}', '{{ d.name }}')">Sincronizar este</button>
+      <form method="post" action="{{ url_for('device_sync_one', device_pk=d.id) }}"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Sincronizando...';">
+        <button type="submit" class="secondary" style="background:#7c3aed;">Sincronizar este</button>
+      </form>
     </div>
     <div class="btn-group">
       <form method="post" action="{{ url_for('device_restart', device_pk=d.id) }}"
@@ -88,113 +92,7 @@
 </details>
 {% endif %}
 
-<div id="sync-modal" class="sync-modal" hidden>
-  <div class="sync-modal-box">
-    <h3 id="sync-modal-title" style="margin:0;">Sincronizando...</h3>
-    <div id="sync-modal-log" class="sync-modal-log"></div>
-    <div id="sync-modal-result" class="sync-modal-result"></div>
-    <p id="sync-modal-hint" class="muted" style="margin:0; font-size:12px;">Puedes cerrar esta ventana en cualquier momento -- es solo lectura, no pasa nada si la sincronización sigue en el servidor de fondo.</p>
-    <button id="sync-modal-close" class="btn secondary" onclick="closeSyncModal()">Cerrar</button>
-  </div>
-</div>
-
 <script>
-// Live sync progress via short polls instead of one long-held connection
-// (a Server-Sent Events version of this got stuck in practice -- some
-// layer between server and browser buffered the very first message
-// indefinitely, and the "Cerrar" button had nothing reliable to hook
-// into). Polling is dumber but far more robust: every tick is a normal,
-// fast request with an immediate answer, so there's nothing to hang on,
-// and "Cerrar" never depends on any connection state at all.
-var syncPollTimer = null;
-var syncJobId = null;
-var syncStaleWarned = false;
-var SYNC_STATUS_URL_BASE = "{{ url_for('sync_job_status', job_id='__JOBID__') }}".replace('__JOBID__', '');
-// Bumped whenever this script changes -- shown in the modal's first line,
-// so a stale cached copy of this page is immediately obvious instead of
-// looking identical to the current version.
-var SYNC_JS_BUILD = "2026-09-16.polling";
-
-function openSyncModal(title) {
-  document.getElementById('sync-modal-title').textContent = title;
-  document.getElementById('sync-modal-log').textContent = '';
-  document.getElementById('sync-modal-result').textContent = '';
-  document.getElementById('sync-modal-hint').hidden = false;
-  document.getElementById('sync-modal').hidden = false;
-  syncStaleWarned = false;
-  // Written immediately, before any network call -- the log should never
-  // sit empty even for a moment, so there's always visible proof this
-  // script is actually running (and not, say, a stale cached version).
-  appendSyncLog('Iniciando... (build ' + SYNC_JS_BUILD + ')');
-}
-function stopSyncPolling() {
-  if (syncPollTimer) { clearTimeout(syncPollTimer); syncPollTimer = null; }
-  syncJobId = null;
-}
-function closeSyncModal() {
-  stopSyncPolling();
-  document.getElementById('sync-modal').hidden = true;
-  location.reload();
-}
-function appendSyncLog(msg) {
-  var log = document.getElementById('sync-modal-log');
-  log.textContent += msg + "\n";
-  log.scrollTop = log.scrollHeight;
-}
-function finishSync(msg) {
-  appendSyncLog(msg);
-  document.getElementById('sync-modal-result').textContent = msg;
-  document.getElementById('sync-modal-hint').hidden = true;
-  stopSyncPolling();
-}
-function pollSyncStatus(cursor) {
-  fetch(SYNC_STATUS_URL_BASE + syncJobId + '?since=' + cursor, { cache: 'no-store' })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      if (!syncJobId) return; // modal was closed while this request was in flight
-      var messages = data.messages || [];
-      for (var i = 0; i < messages.length; i++) { appendSyncLog(messages[i]); syncStaleWarned = false; }
-      var nextCursor = data.cursor || cursor;
-      if (data.status === 'done') {
-        var result = data.result || {};
-        var msg;
-        if (typeof result.count !== 'undefined') {
-          msg = 'Listo: ' + result.count + ' registro(s) nuevo(s) en \'' + result.device + '\'.';
-        } else if (typeof result.summary !== 'undefined') {
-          msg = 'Listo. ' + result.summary;
-        } else {
-          msg = 'Listo.';
-        }
-        finishSync(msg);
-      } else if (data.status === 'error') {
-        finishSync('Error: ' + ((data.result && data.result.message) || 'desconocido'));
-      } else if (data.status === 'not_found') {
-        finishSync('No se encontró este proceso en el servidor (¿se reinició mientras corría?). Revisa el estado del dispositivo más abajo.');
-      } else {
-        if (messages.length === 0 && !syncStaleWarned) {
-          syncStaleWarned = true;
-          appendSyncLog('(esperando respuesta del dispositivo, puede tardar...)');
-        }
-        syncPollTimer = setTimeout(function() { pollSyncStatus(nextCursor); }, 1000);
-      }
-    })
-    .catch(function() {
-      // One failed poll (a network blip) shouldn't give up -- just retry.
-      if (syncJobId) { syncPollTimer = setTimeout(function() { pollSyncStatus(cursor); }, 2000); }
-    });
-}
-function startSync(startUrl, title) {
-  openSyncModal('Sincronizando: ' + title);
-  fetch(startUrl, { method: 'POST' })
-    .then(function(r) { return r.json(); })
-    .then(function(data) {
-      syncJobId = data.job_id;
-      pollSyncStatus(0);
-    })
-    .catch(function(err) {
-      finishSync('No se pudo iniciar la sincronización: ' + err);
-    });
-}
 function confirmClearDevice(form, deviceName) {
   var typed = prompt(
     'Esto borra TODAS las marcaciones guardadas EN EL EQUIPO "' + deviceName + '" para que empiece a registrar desde cero.\n\n' +

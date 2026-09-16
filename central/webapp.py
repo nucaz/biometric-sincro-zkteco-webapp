@@ -13,9 +13,6 @@ import io
 import json
 import os
 import sys
-import threading
-import time
-import uuid
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
 
@@ -128,97 +125,40 @@ def _audit_context():
     }
 
 
-# --------------------------------------------------- sync progress jobs ---
-# A live-updating "Sincronizando..." view needs SOME way to report progress
-# back to the browser. The first version used Server-Sent Events (one
-# long-held HTTP connection streaming updates) -- it turned out too fragile
-# in practice (buffering by an intermediate layer could delay the very
-# first message indefinitely, and a stuck connection had no clean way to
-# let the user just walk away from it). This is deliberately simpler and
-# far more robust instead: the sync runs as a background job with an id,
-# and the browser polls a plain JSON status endpoint every second. Each
-# poll is a normal, short-lived request -- nothing to get stuck on, and
-# "Cerrar" never depends on any connection state at all.
-_sync_jobs = {}
-_sync_jobs_lock = threading.Lock()
-SYNC_JOB_TTL_SECONDS = 3600  # prune finished jobs after an hour so this dict doesn't grow forever
-
+# ------------------------------------------------------ sync hard timeout -
+# No live progress view anymore -- it went through two designs (Server-Sent
+# Events, then polling a background job) and both ended up adding more
+# failure modes than they were worth for what's fundamentally a "click a
+# button, wait, see the result" action. Back to a plain blocking request:
+# the button disables itself while the form submits, the page redirects
+# back with a flash message once it's done. What's still very much needed:
 # sync_device()'s own retry loop is supposed to bound how long a device can
-# take (3 attempts x 20s timeout + delays, well under 2 minutes) -- but a
-# flaky device (seen for real against one K20) can make a pyzk socket call
-# hang past its own configured timeout instead of raising, which no amount
-# of retry logic inside sync_device() can protect against. This is the
-# actual ceiling: run the job on a small pool and give up on waiting for it
-# after HARD_SYNC_TIMEOUT_SECONDS no matter what, so a job ALWAYS resolves
-# to done/error within a bounded time and the browser is never left polling
-# a "running" status forever. Python can't forcibly kill the underlying
-# thread if it's truly stuck in a blocking call, so a hung one leaks (it
-# will die with the process) -- max_workers is generous specifically so a
-# few of those in the background can't starve out real work.
+# take (3 attempts x 20s timeout + delays, under 2 minutes) -- but a flaky
+# device (seen for real against one K20) can make a pyzk socket call hang
+# PAST its own configured timeout instead of raising, which no amount of
+# retry logic inside sync_device() can protect against. run_with_hard_timeout
+# is the actual ceiling: past HARD_SYNC_TIMEOUT_SECONDS, give up and report
+# an error instead of leaving the request (and the waitress/gunicorn worker
+# thread serving it) hanging forever. Python can't forcibly kill the
+# underlying thread if it's truly stuck in a blocking call, so a hung one
+# leaks in the background (it dies with the process) -- max_workers is
+# generous specifically so a few of those can't starve out real work.
 _sync_executor = ThreadPoolExecutor(max_workers=8, thread_name_prefix="sync-job")
 HARD_SYNC_TIMEOUT_SECONDS = 150
 
 
-def _prune_sync_jobs():
-    cutoff = time.time() - SYNC_JOB_TTL_SECONDS
-    for job_id in [jid for jid, job in _sync_jobs.items() if job["created"] < cutoff]:
-        del _sync_jobs[job_id]
-
-
-def _start_sync_job(worker):
-    """Runs `worker(progress, ctx)` on the shared sync thread pool and
-    returns a job id the browser can poll via /sync/status/<job_id>. `ctx`
-    is a snapshot from _audit_context(), since that thread has no Flask
-    request context of its own to read flask_session/request from."""
-    ctx = _audit_context()
-    job_id = uuid.uuid4().hex
-    with _sync_jobs_lock:
-        _prune_sync_jobs()
-        _sync_jobs[job_id] = {"messages": [], "status": "running", "result": None, "created": time.time()}
-
-    def progress(msg):
-        with _sync_jobs_lock:
-            job = _sync_jobs.get(job_id)
-            if job is not None:
-                job["messages"].append(msg)
-
-    def run():
-        future = _sync_executor.submit(worker, progress, ctx)
-        try:
-            result = future.result(timeout=HARD_SYNC_TIMEOUT_SECONDS)
-            status, payload = "done", result
-        except FuturesTimeoutError:
-            status, payload = "error", {
-                "message": f"Sin respuesta del dispositivo tras {HARD_SYNC_TIMEOUT_SECONDS} segundos -- "
-                           "probablemente un problema de red con ese equipo, no de la aplicación. "
-                           "El intento se abandonó aquí; puede seguir colgado en el servidor hasta que se reinicie el servicio."
-            }
-        except Exception as e:
-            status, payload = "error", {"message": str(e)}
-        with _sync_jobs_lock:
-            job = _sync_jobs.get(job_id)
-            if job is not None:
-                job["status"] = status
-                job["result"] = payload
-
-    threading.Thread(target=run, daemon=True).start()
-    return job_id
-
-
-@app.route("/sync/status/<job_id>")
-@admin_required
-def sync_job_status(job_id):
-    since = request.args.get("since", 0, type=int)
-    with _sync_jobs_lock:
-        job = _sync_jobs.get(job_id)
-        if job is None:
-            return {"status": "not_found", "messages": [], "cursor": since, "result": None}
-        return {
-            "status": job["status"],
-            "messages": job["messages"][since:],
-            "cursor": len(job["messages"]),
-            "result": job["result"],
-        }
+def run_with_hard_timeout(fn, *args, **kwargs):
+    """Call fn(*args, **kwargs) with a firm ceiling. Raises TimeoutError
+    (built-in, not concurrent.futures') with a clear Spanish message if it
+    doesn't return in time -- callers just need one except TimeoutError."""
+    future = _sync_executor.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=HARD_SYNC_TIMEOUT_SECONDS)
+    except FuturesTimeoutError:
+        raise TimeoutError(
+            f"Sin respuesta del dispositivo tras {HARD_SYNC_TIMEOUT_SECONDS} segundos -- "
+            "probablemente un problema de red con ese equipo, no de la aplicación."
+        )
 
 
 # ---------------------------------------------------------------- auth ----
@@ -690,30 +630,13 @@ def devices_status():
 @admin_required
 def sync_now():
     """Manual trigger for the same pull that central.sync does on a
-    schedule -- runs inline, so it blocks until every active device has
-    been polled (can take a minute or two with a lot of history). Kept as
-    a plain form-POST fallback; the "Sincronizar todos" button in the UI
-    uses /sync/stream instead, for live progress."""
-    results = sync_all()
-    summary = "; ".join(f"{name}: {result}" for name, result in results.items())
-    db = SessionLocal()
-    try:
-        _audit(db, "sync_all", detail=summary)
-    finally:
-        db.close()
-    flash(f"Sincronización completa. {summary}")
-    return redirect(url_for("devices_status"))
+    schedule -- blocks until every active device has been polled or the
+    hard timeout gives up on one (can take a while with a lot of devices
+    or history; the button disables itself client-side while it waits)."""
+    ctx = _audit_context()
 
-
-@app.route("/sync/start", methods=["POST"])
-@admin_required
-def sync_all_start():
-    """Same as /sync but returns immediately with a job id for the browser
-    to poll (/sync/status/<job_id>) -- what the "Sincronizar todos" button
-    actually calls, so it can show live progress instead of just hanging
-    for a minute or two."""
-    def worker(progress, ctx):
-        results = sync_all(progress=progress)
+    def work():
+        results = sync_all()
         summary = "; ".join(f"{name}: {result}" for name, result in results.items())
         db = SessionLocal()
         try:
@@ -721,8 +644,19 @@ def sync_all_start():
             db.commit()
         finally:
             db.close()
-        return {"summary": summary, "results": results}
-    return {"job_id": _start_sync_job(worker)}
+        return summary
+
+    try:
+        flash(f"Sincronización completa. {run_with_hard_timeout(work)}")
+    except TimeoutError as e:
+        db = SessionLocal()
+        try:
+            log_event(db, "sync_all", detail=f"ERROR: {e}", **ctx)
+            db.commit()
+        finally:
+            db.close()
+        flash(f"Sincronización interrumpida: {e}")
+    return redirect(url_for("devices_status"))
 
 
 @app.route("/devices/<int:device_pk>/sync", methods=["POST"])
@@ -731,47 +665,38 @@ def device_sync_one(device_pk):
     """Same as 'Sincronizar todos' but for just this one device -- handy
     right after fixing a device's IP/comm key without waiting for the
     others to be polled too."""
+    ctx = _audit_context()
     db = SessionLocal()
     try:
-        device = db.get(Device, device_pk) or abort_404()
-        try:
-            count = sync_device(db, device)
-            _audit(db, "device_sync", target=device.name, detail=f"{count} registro(s) nuevo(s)")
-            flash(f"'{device.name}' sincronizado: {count} registro(s) nuevo(s).")
-        except Exception as e:
-            db.rollback()
-            _audit(db, "device_sync", target=device.name, detail=f"ERROR: {e}")
-            flash(f"Error sincronizando '{device.name}': {e}")
-        return redirect(url_for("devices_status"))
+        device_name = (db.get(Device, device_pk) or abort_404()).name
     finally:
         db.close()
 
-
-@app.route("/devices/<int:device_pk>/sync/start", methods=["POST"])
-@admin_required
-def device_sync_start(device_pk):
-    """Same as /devices/<id>/sync but returns immediately with a job id
-    for the browser to poll -- what the "Sincronizar este" button actually
-    calls."""
-    def worker(progress, ctx):
-        db = SessionLocal()
+    def work():
+        db2 = SessionLocal()
         try:
-            device = db.get(Device, device_pk)
-            if not device:
-                raise RuntimeError("Dispositivo no encontrado.")
+            device = db2.get(Device, device_pk)
             try:
-                count = sync_device(db, device, progress=progress)
-                log_event(db, "device_sync", target=device.name, detail=f"{count} registro(s) nuevo(s)", **ctx)
-                db.commit()
-                return {"device": device.name, "count": count}
+                count = sync_device(db2, device)
+                log_event(db2, "device_sync", target=device.name, detail=f"{count} registro(s) nuevo(s)", **ctx)
+                db2.commit()
+                return count
             except Exception as e:
-                db.rollback()
-                log_event(db, "device_sync", target=device.name, detail=f"ERROR: {e}", **ctx)
-                db.commit()
+                db2.rollback()
+                log_event(db2, "device_sync", target=device.name, detail=f"ERROR: {e}", **ctx)
+                db2.commit()
                 raise
         finally:
-            db.close()
-    return {"job_id": _start_sync_job(worker)}
+            db2.close()
+
+    try:
+        count = run_with_hard_timeout(work)
+        flash(f"'{device_name}' sincronizado: {count} registro(s) nuevo(s).")
+    except TimeoutError as e:
+        flash(f"'{device_name}': {e}")
+    except Exception as e:
+        flash(f"Error sincronizando '{device_name}': {e}")
+    return redirect(url_for("devices_status"))
 
 
 @app.route("/devices/new", methods=["GET", "POST"])
