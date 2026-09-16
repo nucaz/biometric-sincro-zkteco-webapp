@@ -142,6 +142,15 @@ Ver más detalle técnico del panel (esquema de datos, automatización del
 sync, cómo agregar un dispositivo nuevo) en
 [`central/README.md`](central/README.md).
 
+### Guías ilustradas y diagrama de arquitectura
+
+- [`deploy/docs/instalacion_windows_server.pdf`](deploy/docs/instalacion_windows_server.pdf)
+- [`deploy/docs/instalacion_linux_server.pdf`](deploy/docs/instalacion_linux_server.pdf)
+- [`deploy/docs/architecture.drawio`](deploy/docs/architecture.drawio) --
+  ábrelo en [app.diagrams.net](https://app.diagrams.net) para ver/editar el
+  diagrama completo (relojes -> sincronización -> base de datos -> panel
+  web -> navegador).
+
 ## Estructura del repositorio
 
 ```

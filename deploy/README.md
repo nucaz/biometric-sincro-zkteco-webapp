@@ -5,6 +5,27 @@
 | [`windows_desktop/`](windows_desktop/README.md) | `ZKTecoAttendanceSystem_Setup_X.Y.Z.0.exe` -- instalador de la app de escritorio (PyInstaller + Inno Setup) | Sí, de punta a punta: build, instalación silenciosa, registro en "Agregar o quitar programas", ejecución, desinstalación |
 | [`linux_server/`](linux_server/README.md) | Servicio systemd del panel central + PostgreSQL, para Debian/Ubuntu | No -- sin servidor Linux disponible en esta sesión. Sintaxis validada, lógica revisada con cuidado |
 | [`windows_server/`](windows_server/README.md) | El mismo panel central como Tareas Programadas de Windows, con SQLite o apuntando a una BD externa | Sí, de punta a punta salvo el registro final de las tareas (requiere sesión con privilegios de Administrador que esta sesión no tiene) |
+| [`docs/`](docs/) | Guías de instalación ilustradas en PDF (Windows y Linux) + diagrama de arquitectura para draw.io | Generadas con `fpdf2`, sin errores de compilación |
+
+## Guías y diagramas
+
+- [`docs/instalacion_windows_server.pdf`](docs/instalacion_windows_server.pdf) --
+  requisitos y pasos para instalar el panel en Windows Server, con diagrama
+  de flujo y solución de problemas.
+- [`docs/instalacion_linux_server.pdf`](docs/instalacion_linux_server.pdf) --
+  lo mismo para Debian/Ubuntu.
+- [`docs/architecture.drawio`](docs/architecture.drawio) -- diagrama de
+  arquitectura completo (relojes, sync, base de datos, panel web,
+  navegador) para abrir en [app.diagrams.net](https://app.diagrams.net)
+  (draw.io) o la extensión de VS Code.
+
+Estos PDFs no son capturas de un asistente gráfico -- la instalación en
+servidor es por línea de comandos, así que en vez de fotos usan diagramas
+vectoriales de cada paso. Se generan con
+[`docs/generate_install_pdfs.py`](docs/generate_install_pdfs.py); vuelve a
+correrlo (`venv\Scripts\python deploy\docs\generate_install_pdfs.py`) cada
+vez que cambien los pasos de instalación, para que la documentación no se
+desactualice.
 
 ## Regla de oro
 
