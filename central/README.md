@@ -34,11 +34,15 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     estilo, filtros y auto-ancho) o PDF (con encabezado, franjas y pie de
     página con paginación).
   - **Dispositivos**: tarjetas por equipo (no una tabla apretada) con
-    Editar, Usuarios, Probar conexión, Ping, Reiniciar, Apagar y **Vaciar
-    dispositivo** — más "Sincronizar todos"/"Sincronizar este", que abren
-    una ventana con el progreso en vivo (conectando, descargando,
-    guardando, y cuántos registros nuevos al terminar) en vez de dejar el
-    botón "colgado" sin feedback.
+    Editar, Usuarios, Probar conexión, Ping, Reiniciar, Apagar, **Vaciar
+    dispositivo** y **Eliminar** (nunca borra el historial -- solo oculta
+    el dispositivo, con un botón "Restaurar" en "Ver eliminados"). Los
+    botones "Sincronizar todos"/"Sincronizar este" se deshabilitan
+    mientras trabajan y muestran el resultado al terminar (cuántos
+    registros nuevos, o el error) -- una versión anterior con una ventana
+    de progreso en vivo resultó demasiado frágil en la práctica y se
+    volvió a este diseño más simple, con el mismo tope duro de 150s por
+    si el dispositivo se cuelga.
   - **Usuarios de un dispositivo** (`/devices/<id>/users`): lista en vivo
     quién está enrolado en ESE reloj físico, con alta/edición/baja directa
     (busca por ID/DNI, apellido o código) — escribe en el equipo real vía
