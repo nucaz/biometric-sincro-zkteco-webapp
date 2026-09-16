@@ -12,7 +12,7 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from attendance_system import ZKTecoAttendance  # noqa: E402
+from attendance_system import ZKTecoAttendance, device_lock  # noqa: E402
 from central.db import SessionLocal, init_db  # noqa: E402
 from central.models import Device, AttendanceLog, utcnow  # noqa: E402
 
@@ -38,38 +38,48 @@ def _pull_raw_with_retry(device: Device, progress=None):
     the raw DataFrame (or None if the device genuinely has zero records
     right now) -- does NOT touch the central DB."""
     progress = progress or _noop
-    raw = None
-    last_error = None
-    for attempt in range(1, MAX_ATTEMPTS + 1):
-        prefix = f"(intento {attempt}/{MAX_ATTEMPTS}) " if attempt > 1 else ""
-        progress(f"{prefix}Conectando a '{device.name}' ({device.ip}:{device.port})...")
-        system = ZKTecoAttendance(
-            device.ip, port=device.port, password=device.comm_password or 0,
-            timeout=SYNC_TIMEOUT_SECONDS,
+    lock = device_lock((device.ip, device.port))
+    if not lock.acquire(blocking=False):
+        raise RuntimeError(
+            f"'{device.name}' ya tiene otra operación en curso (otra sincronización, "
+            "una prueba de conexión, etc.) -- se omite esta vuelta en vez de sumar "
+            "una segunda conexión al mismo equipo."
         )
-        try:
-            system.connect()
-            if not system.conn:
-                last_error = "Connection failed"
-                raise RuntimeError(last_error)
-            progress(f"Conectado. Descargando marcaciones de '{device.name}'... (puede tardar según cuántas tenga)")
-            raw = system.get_raw_attendance(device_name=device.name)
-            model = system.device_info.get('model', '').strip()
-            if model and model != device.model:
-                device.model = model
-            last_error = None
-            break
-        except Exception as e:
-            last_error = str(e)
-            progress(f"Error en el intento {attempt}: {last_error}")
-        finally:
-            system.disconnect()
-        if attempt < MAX_ATTEMPTS:
-            time.sleep(RETRY_DELAY_SECONDS)
+    try:
+        raw = None
+        last_error = None
+        for attempt in range(1, MAX_ATTEMPTS + 1):
+            prefix = f"(intento {attempt}/{MAX_ATTEMPTS}) " if attempt > 1 else ""
+            progress(f"{prefix}Conectando a '{device.name}' ({device.ip}:{device.port})...")
+            system = ZKTecoAttendance(
+                device.ip, port=device.port, password=device.comm_password or 0,
+                timeout=SYNC_TIMEOUT_SECONDS,
+            )
+            try:
+                system.connect()
+                if not system.conn:
+                    last_error = "Connection failed"
+                    raise RuntimeError(last_error)
+                progress(f"Conectado. Descargando marcaciones de '{device.name}'... (puede tardar según cuántas tenga)")
+                raw = system.get_raw_attendance(device_name=device.name)
+                model = system.device_info.get('model', '').strip()
+                if model and model != device.model:
+                    device.model = model
+                last_error = None
+                break
+            except Exception as e:
+                last_error = str(e)
+                progress(f"Error en el intento {attempt}: {last_error}")
+            finally:
+                system.disconnect()
+            if attempt < MAX_ATTEMPTS:
+                time.sleep(RETRY_DELAY_SECONDS)
 
-    if last_error is not None:
-        raise RuntimeError(last_error)
-    return raw
+        if last_error is not None:
+            raise RuntimeError(last_error)
+        return raw
+    finally:
+        lock.release()
 
 
 def _insert_new_rows(session, device: Device, raw, progress=None) -> int:
@@ -133,7 +143,7 @@ def sync_device(session, device: Device, progress=None) -> int:
         raw = _pull_raw_with_retry(device, progress)
     except RuntimeError as e:
         device.last_synced_at = utcnow()
-        device.last_sync_status = f"Error tras {MAX_ATTEMPTS} intentos: {e}"
+        device.last_sync_status = f"Error: {e}"
         session.commit()
         raise
     return _insert_new_rows(session, device, raw, progress)
@@ -152,7 +162,7 @@ def backup_device(session, device: Device, progress=None):
         raw = _pull_raw_with_retry(device, progress)
     except RuntimeError as e:
         device.last_synced_at = utcnow()
-        device.last_sync_status = f"Error tras {MAX_ATTEMPTS} intentos: {e}"
+        device.last_sync_status = f"Error: {e}"
         session.commit()
         raise
     new_count = _insert_new_rows(session, device, raw, progress)

@@ -27,7 +27,7 @@ from flask import (
 from zk import const as zk_const
 from sqlalchemy import func
 
-from attendance_system import ZKTecoAttendance, check_network_reachable
+from attendance_system import ZKTecoAttendance, check_network_reachable, device_lock
 from central.db import SessionLocal, init_db
 from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog
 from central.auth import login_required, admin_required, super_admin_required, verify_password, hash_password, ROLE_LABELS
@@ -48,13 +48,6 @@ app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
 init_db()
 
 PAGE_SIZE = 200
-
-
-def _connect_to(device):
-    """Build a ZKTecoAttendance for `device`, carrying its comm key (the
-    ZK "communication password" -- ZKTimeNet's own att_terminal.terminal_connectpwd
-    column, confirmed against the local ZKTimeNet.db install) if one is set."""
-    return ZKTecoAttendance(device.ip, port=device.port, password=device.comm_password or 0)
 
 
 @app.before_request
@@ -152,6 +145,41 @@ def run_with_hard_timeout(fn, *args, **kwargs):
     (built-in, not concurrent.futures') with a clear Spanish message if it
     doesn't return in time -- callers just need one except TimeoutError."""
     future = _sync_executor.submit(fn, *args, **kwargs)
+    try:
+        return future.result(timeout=HARD_SYNC_TIMEOUT_SECONDS)
+    except FuturesTimeoutError:
+        raise TimeoutError(
+            f"Sin respuesta del dispositivo tras {HARD_SYNC_TIMEOUT_SECONDS} segundos -- "
+            "probablemente un problema de red con ese equipo, no de la aplicación."
+        )
+
+
+def run_device_op(device_ip, device_port, device_name, fn, *args, **kwargs):
+    """Like run_with_hard_timeout, but for an action that opens a
+    connection to one specific physical device (Probar conexión,
+    Reiniciar, Apagar, Vaciar, Usuarios). Refuses to start a second one
+    while a previous attempt on the SAME device is still in flight --
+    including one still leaking in the background past its own hard
+    timeout, see _sync_executor above -- since a ZK terminal only accepts
+    one live session at a time. Uses the same lock registry as central.sync, so
+    this also won't collide with a "Sincronizar"/"Descargar respaldo" that's
+    mid-flight for this device (within this process -- a scheduled
+    `python -m central.sync` run is a separate process and isn't covered)."""
+    lock = device_lock((device_ip, device_port))
+    if not lock.acquire(blocking=False):
+        raise RuntimeError(
+            f"'{device_name}' ya tiene otra operación en curso (sincronización, prueba "
+            "de conexión, etc.). Espera a que termine antes de intentar de nuevo -- "
+            "el equipo solo acepta una conexión a la vez."
+        )
+
+    def guarded():
+        try:
+            return fn(*args, **kwargs)
+        finally:
+            lock.release()
+
+    future = _sync_executor.submit(guarded)
     try:
         return future.result(timeout=HARD_SYNC_TIMEOUT_SECONDS)
     except FuturesTimeoutError:
@@ -853,33 +881,58 @@ def device_test(device_pk):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
+        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+    finally:
+        db.close()
 
-        reachable, detail = check_network_reachable(device.ip, device.port)
-        if not reachable:
-            _audit(db, "device_test", target=device.name, detail=f"ERROR (red): {detail}")
-            flash(f"'{device.name}' ({device.ip}:{device.port}) no responde en la red: {detail}")
-            return redirect(url_for("devices_status"))
+    reachable, detail = check_network_reachable(device_ip, device_port)
+    if not reachable:
+        db = SessionLocal()
+        try:
+            _audit(db, "device_test", target=device_name, detail=f"ERROR (red): {detail}")
+        finally:
+            db.close()
+        flash(f"'{device_name}' ({device_ip}:{device_port}) no responde en la red: {detail}")
+        return redirect(url_for("devices_status"))
 
-        system = _connect_to(device)
+    def work():
+        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            hint = " Revisa la llave de comunicación (comm key) configurada en el equipo." if device.comm_password == 0 else " Revisa que la llave de comunicación configurada aquí coincida con la del equipo."
-            _audit(db, "device_test", target=device.name, detail="ERROR (protocolo ZK rechazado)")
-            flash(f"'{device.name}' responde en la red pero rechazó la conexión del protocolo ZK.{hint}")
-            return redirect(url_for("devices_status"))
+            return None
         try:
-            model = system.device_info.get('model', '').strip()
-            serial = system.device_info.get('serial_number', '').strip()
-            device.model = model or device.model
-            if serial and device.device_id != serial:
-                clash = db.query(Device).filter(Device.device_id == serial, Device.id != device.id).first()
-                if not clash:
-                    device.device_id = serial
-            db.commit()
-            _audit(db, "device_test", target=device.name, detail=f"OK - modelo {model or '?'}, serial {serial or '?'}")
-            flash(f"Conexión OK con '{device.name}': modelo {model or '?'}, serial {serial or '?'}.")
+            return {
+                "model": system.device_info.get('model', '').strip(),
+                "serial": system.device_info.get('serial_number', '').strip(),
+            }
         finally:
             system.disconnect()
+
+    db = SessionLocal()
+    try:
+        try:
+            result = run_device_op(device_ip, device_port, device_name, work)
+        except Exception as e:
+            _audit(db, "device_test", target=device_name, detail=f"ERROR: {e}")
+            flash(f"'{device_name}': {e}")
+            return redirect(url_for("devices_status"))
+
+        if result is None:
+            hint = " Revisa la llave de comunicación (comm key) configurada en el equipo." if comm_password == 0 else " Revisa que la llave de comunicación configurada aquí coincida con la del equipo."
+            _audit(db, "device_test", target=device_name, detail="ERROR (protocolo ZK rechazado)")
+            flash(f"'{device_name}' responde en la red pero rechazó la conexión del protocolo ZK.{hint}")
+            return redirect(url_for("devices_status"))
+
+        device = db.get(Device, device_pk) or abort_404()
+        model, serial = result["model"], result["serial"]
+        device.model = model or device.model
+        if serial and device.device_id != serial:
+            clash = db.query(Device).filter(Device.device_id == serial, Device.id != device.id).first()
+            if not clash:
+                device.device_id = serial
+        db.commit()
+        _audit(db, "device_test", target=device.name, detail=f"OK - modelo {model or '?'}, serial {serial or '?'}")
+        flash(f"Conexión OK con '{device.name}': modelo {model or '?'}, serial {serial or '?'}.")
         return redirect(url_for("devices_status"))
     finally:
         db.close()
@@ -911,18 +964,29 @@ def device_restart(device_pk):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        system = _connect_to(device)
+        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+    finally:
+        db.close()
+
+    def work():
+        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            flash(f"No se pudo conectar a '{device.name}' para reiniciarlo.")
-            return redirect(url_for("devices_status"))
+            raise RuntimeError("no se pudo conectar")
         try:
             system.restart_device()
-            _audit(db, "device_restart", target=device.name)
-            flash(f"Se envió el reinicio a '{device.name}'. Tardará unos segundos en volver a estar disponible.")
+        finally:
+            system.disconnect()
+
+    db = SessionLocal()
+    try:
+        try:
+            run_device_op(device_ip, device_port, device_name, work)
+            _audit(db, "device_restart", target=device_name)
+            flash(f"Se envió el reinicio a '{device_name}'. Tardará unos segundos en volver a estar disponible.")
         except Exception as e:
-            _audit(db, "device_restart", target=device.name, detail=f"ERROR: {e}")
-            flash(f"Error al reiniciar '{device.name}': {e}")
+            _audit(db, "device_restart", target=device_name, detail=f"ERROR: {e}")
+            flash(f"Error al reiniciar '{device_name}': {e}")
         return redirect(url_for("devices_status"))
     finally:
         db.close()
@@ -934,18 +998,29 @@ def device_poweroff(device_pk):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        system = _connect_to(device)
+        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+    finally:
+        db.close()
+
+    def work():
+        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            flash(f"No se pudo conectar a '{device.name}' para apagarlo.")
-            return redirect(url_for("devices_status"))
+            raise RuntimeError("no se pudo conectar")
         try:
             system.poweroff_device()
-            _audit(db, "device_poweroff", target=device.name)
-            flash(f"Se envió el apagado a '{device.name}'. A diferencia de reiniciar, no volverá a encender solo.")
+        finally:
+            system.disconnect()
+
+    db = SessionLocal()
+    try:
+        try:
+            run_device_op(device_ip, device_port, device_name, work)
+            _audit(db, "device_poweroff", target=device_name)
+            flash(f"Se envió el apagado a '{device_name}'. A diferencia de reiniciar, no volverá a encender solo.")
         except Exception as e:
-            _audit(db, "device_poweroff", target=device.name, detail=f"ERROR: {e}")
-            flash(f"Error al apagar '{device.name}': {e}")
+            _audit(db, "device_poweroff", target=device_name, detail=f"ERROR: {e}")
+            flash(f"Error al apagar '{device_name}': {e}")
         return redirect(url_for("devices_status"))
     finally:
         db.close()
@@ -962,24 +1037,33 @@ def device_clear_attendance(device_pk):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        if request.form.get("confirm_name", "").strip() != device.name:
-            flash(f"El nombre escrito no coincide con '{device.name}' -- no se vació nada.")
+        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+        if request.form.get("confirm_name", "").strip() != device_name:
+            flash(f"El nombre escrito no coincide con '{device_name}' -- no se vació nada.")
             return redirect(url_for("devices_status"))
-        system = _connect_to(device)
+    finally:
+        db.close()
+
+    def work():
+        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            flash(f"No se pudo conectar a '{device.name}' para vaciarlo.")
-            return redirect(url_for("devices_status"))
+            raise RuntimeError("no se pudo conectar")
         try:
             system.clear_attendance_log()
-            _audit(db, "device_clear_attendance", target=device.name,
-                   detail="marcaciones borradas del equipo (el historial central se conserva)")
-            flash(f"'{device.name}' vaciado: sus marcaciones se borraron del equipo. El historial ya sincronizado en el panel se conserva intacto.")
-        except Exception as e:
-            _audit(db, "device_clear_attendance", target=device.name, detail=f"ERROR: {e}")
-            flash(f"Error al vaciar '{device.name}': {e}")
         finally:
             system.disconnect()
+
+    db = SessionLocal()
+    try:
+        try:
+            run_device_op(device_ip, device_port, device_name, work)
+            _audit(db, "device_clear_attendance", target=device_name,
+                   detail="marcaciones borradas del equipo (el historial central se conserva)")
+            flash(f"'{device_name}' vaciado: sus marcaciones se borraron del equipo. El historial ya sincronizado en el panel se conserva intacto.")
+        except Exception as e:
+            _audit(db, "device_clear_attendance", target=device_name, detail=f"ERROR: {e}")
+            flash(f"Error al vaciar '{device_name}': {e}")
         return redirect(url_for("devices_status"))
     finally:
         db.close()
@@ -1024,7 +1108,7 @@ def device_users(device_pk):
             system.disconnect()
 
     try:
-        users = run_with_hard_timeout(work)
+        users = run_device_op(device_ip, device_port, device_name, work)
     except TimeoutError as e:
         flash(f"'{device_name}': {e}")
         return redirect(url_for("devices_status"))
@@ -1059,22 +1143,26 @@ def device_user_new(device_pk):
             privilege = zk_const.USER_ADMIN if request.form.get("privilege") == "admin" else zk_const.USER_DEFAULT
             card = request.form.get("card", "").strip()
             employee_id = request.form.get("employee_id")
+            device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
 
-            system = _connect_to(device)
-            system.connect()
-            if not system.conn:
-                flash(f"No se pudo conectar a '{device.name}'. No se creó el usuario.")
-                return redirect(url_for("device_users", device_pk=device.id))
+            def work():
+                system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
+                system.connect()
+                if not system.conn:
+                    raise RuntimeError("no se pudo conectar")
+                try:
+                    return system.create_or_update_user(
+                        user_id=user_id, name=name, privilege=privilege,
+                        card=int(card) if card.isdigit() else 0,
+                    )
+                finally:
+                    system.disconnect()
+
             try:
-                created = system.create_or_update_user(
-                    user_id=user_id, name=name, privilege=privilege,
-                    card=int(card) if card.isdigit() else 0,
-                )
+                created = run_device_op(device_ip, device_port, device_name, work)
             except Exception as e:
                 flash(f"Error escribiendo en el dispositivo: {e}")
                 return redirect(url_for("device_users", device_pk=device.id))
-            finally:
-                system.disconnect()
 
             if employee_id:
                 existing_map = db.query(EmployeeMap).filter(
@@ -1111,25 +1199,29 @@ def device_user_edit(device_pk, user_id):
             privilege = zk_const.USER_ADMIN if request.form.get("privilege") == "admin" else zk_const.USER_DEFAULT
             card = request.form.get("card", "").strip()
             employee_id = request.form.get("employee_id")
+            device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
 
-            system = _connect_to(device)
-            system.connect()
-            if not system.conn:
-                flash(f"No se pudo conectar a '{device.name}'. No se actualizó el usuario.")
-                return redirect(url_for("device_users", device_pk=device.id))
-            try:
+            def work():
                 # create_or_update_user matches by user_id and reuses the
                 # existing internal uid, so this writes an update, not a
                 # second duplicate person.
-                system.create_or_update_user(
-                    user_id=user_id, name=name, privilege=privilege,
-                    card=int(card) if card.isdigit() else 0,
-                )
+                system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
+                system.connect()
+                if not system.conn:
+                    raise RuntimeError("no se pudo conectar")
+                try:
+                    system.create_or_update_user(
+                        user_id=user_id, name=name, privilege=privilege,
+                        card=int(card) if card.isdigit() else 0,
+                    )
+                finally:
+                    system.disconnect()
+
+            try:
+                run_device_op(device_ip, device_port, device_name, work)
             except Exception as e:
                 flash(f"Error escribiendo en el dispositivo: {e}")
                 return redirect(url_for("device_users", device_pk=device.id))
-            finally:
-                system.disconnect()
 
             if employee_id:
                 if current_map:
@@ -1146,15 +1238,23 @@ def device_user_edit(device_pk, user_id):
             return redirect(url_for("device_users", device_pk=device.id))
 
         # GET: pull the user's current data live from the device to prefill the form.
-        system = _connect_to(device)
-        system.connect()
-        if not system.conn:
-            flash(f"No se pudo conectar a '{device.name}' para leer los datos del usuario.")
-            return redirect(url_for("device_users", device_pk=device.id))
+        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+
+        def work():
+            system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
+            system.connect()
+            if not system.conn:
+                raise RuntimeError("no se pudo conectar")
+            try:
+                return next((u for u in system.list_device_users() if str(u['user_id']) == str(user_id)), None)
+            finally:
+                system.disconnect()
+
         try:
-            live_user = next((u for u in system.list_device_users() if str(u['user_id']) == str(user_id)), None)
-        finally:
-            system.disconnect()
+            live_user = run_device_op(device_ip, device_port, device_name, work)
+        except Exception as e:
+            flash(f"No se pudo conectar a '{device_name}' para leer los datos del usuario: {e}")
+            return redirect(url_for("device_users", device_pk=device.id))
         if not live_user:
             flash(f"El usuario {user_id} ya no existe en '{device.name}'.")
             return redirect(url_for("device_users", device_pk=device.id))
@@ -1173,21 +1273,30 @@ def device_user_delete(device_pk, user_id):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        system = _connect_to(device)
+        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+    finally:
+        db.close()
+
+    def work():
+        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            flash(f"No se pudo conectar a '{device.name}'. No se eliminó el usuario.")
-            return redirect(url_for("device_users", device_pk=device.id))
+            raise RuntimeError("no se pudo conectar")
         try:
             system.delete_device_user(user_id)
-            _audit(db, "device_user_delete", target=f"{device.name}: {user_id}")
-            flash(f"Usuario {user_id} eliminado de '{device.name}' (su historial de marcaciones se conserva).")
-        except Exception as e:
-            _audit(db, "device_user_delete", target=f"{device.name}: {user_id}", detail=f"ERROR: {e}")
-            flash(f"Error eliminando en el dispositivo: {e}")
         finally:
             system.disconnect()
-        return redirect(url_for("device_users", device_pk=device.id))
+
+    db = SessionLocal()
+    try:
+        try:
+            run_device_op(device_ip, device_port, device_name, work)
+            _audit(db, "device_user_delete", target=f"{device_name}: {user_id}")
+            flash(f"Usuario {user_id} eliminado de '{device_name}' (su historial de marcaciones se conserva).")
+        except Exception as e:
+            _audit(db, "device_user_delete", target=f"{device_name}: {user_id}", detail=f"ERROR: {e}")
+            flash(f"Error eliminando en el dispositivo: {e}")
+        return redirect(url_for("device_users", device_pk=device_pk))
     finally:
         db.close()
 
@@ -1299,20 +1408,26 @@ def employee_edit(employee_id):
 
             if name_changed and push_to_devices:
                 results = []
+                targets = []
                 for link in db.query(EmployeeMap).filter(EmployeeMap.employee_id == employee.id).all():
                     device = db.get(Device, link.device_pk)
-                    system = _connect_to(device)
-                    system.connect()
-                    if not system.conn:
-                        results.append(f"{device.name}: no se pudo conectar")
-                        continue
+                    targets.append((device.name, device.ip, device.port, device.comm_password, link.device_user_id))
+
+                for device_name, device_ip, device_port, comm_password, device_user_id in targets:
+                    def work():
+                        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
+                        system.connect()
+                        if not system.conn:
+                            raise RuntimeError("no se pudo conectar")
+                        try:
+                            system.create_or_update_user(user_id=device_user_id, name=new_name)
+                        finally:
+                            system.disconnect()
                     try:
-                        system.create_or_update_user(user_id=link.device_user_id, name=new_name)
-                        results.append(f"{device.name}: actualizado")
+                        run_device_op(device_ip, device_port, device_name, work)
+                        results.append(f"{device_name}: actualizado")
                     except Exception as e:
-                        results.append(f"{device.name}: error ({e})")
-                    finally:
-                        system.disconnect()
+                        results.append(f"{device_name}: error ({e})")
                 _audit(db, "employee_edit", target=new_name, detail="propagado a relojes: " + "; ".join(results))
                 flash("Empleado actualizado. Relojes: " + (", ".join(results) if results else "no tenía dispositivos vinculados") + ".")
             else:

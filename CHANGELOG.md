@@ -64,6 +64,20 @@ para el procedimiento completo de release.
   respondía (ej. timeout de red) -- ahora usa el mismo tope duro de 150s
   que "Sincronizar" y muestra un mensaje claro en vez de la pantalla de
   error de Flask.
+- "Probar conexión", "Reiniciar", "Apagar", "Vaciar dispositivo" y las
+  pantallas de alta/edición/baja de usuarios de un reloj se conectaban
+  al equipo sin ningún límite de tiempo -- si el equipo no respondía
+  (ej. timeout de red), la petición podía quedarse colgada indefinidamente,
+  igual que el viejo problema de "Sincronizar". Ahora todas comparten el
+  mismo tope duro de 150s.
+- Un dispositivo con problemas de red podía recibir varias conexiones
+  simultáneas (un clic manual mientras la sincronización automática
+  también lo estaba consultando, por ejemplo) -- como el equipo solo
+  acepta una sesión a la vez, esto hacía que ambas fallaran o se
+  colgaran. Ahora cada dispositivo tiene su propio candado: si ya hay
+  una operación en curso contra él, un segundo intento se avisa al
+  instante ("ya tiene otra operación en curso") en vez de sumarse a la
+  contienda.
 
 ## [1.0.0] - 2026-09-15
 
