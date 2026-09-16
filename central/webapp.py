@@ -66,6 +66,17 @@ def guard():
         return redirect(url_for("login", next=request.path))
 
 
+@app.after_request
+def no_cache(response):
+    # This is an internal HR/admin tool with no static-asset pipeline --
+    # every page is server-rendered per request, so there's no upside to
+    # letting a browser (or a caching proxy) reuse an old copy, and real
+    # downsides: it's how a stale copy of devices.html's sync script could
+    # end up running even after the server was updated with a fix.
+    response.headers["Cache-Control"] = "no-store"
+    return response
+
+
 @app.context_processor
 def inject_role():
     role = flask_session.get("role")

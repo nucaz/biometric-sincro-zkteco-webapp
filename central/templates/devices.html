@@ -89,6 +89,10 @@ var syncPollTimer = null;
 var syncJobId = null;
 var syncStaleWarned = false;
 var SYNC_STATUS_URL_BASE = "{{ url_for('sync_job_status', job_id='__JOBID__') }}".replace('__JOBID__', '');
+// Bumped whenever this script changes -- shown in the modal's first line,
+// so a stale cached copy of this page is immediately obvious instead of
+// looking identical to the current version.
+var SYNC_JS_BUILD = "2026-09-16.polling";
 
 function openSyncModal(title) {
   document.getElementById('sync-modal-title').textContent = title;
@@ -97,6 +101,10 @@ function openSyncModal(title) {
   document.getElementById('sync-modal-hint').hidden = false;
   document.getElementById('sync-modal').hidden = false;
   syncStaleWarned = false;
+  // Written immediately, before any network call -- the log should never
+  // sit empty even for a moment, so there's always visible proof this
+  // script is actually running (and not, say, a stale cached version).
+  appendSyncLog('Iniciando... (build ' + SYNC_JS_BUILD + ')');
 }
 function stopSyncPolling() {
   if (syncPollTimer) { clearTimeout(syncPollTimer); syncPollTimer = null; }

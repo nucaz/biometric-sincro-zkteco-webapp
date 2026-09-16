@@ -144,5 +144,22 @@ def sync_all(progress=None) -> dict:
 
 
 if __name__ == "__main__":
-    for name, result in sync_all().items():
+    results = sync_all()
+    for name, result in results.items():
         print(f"{name}: {result}")
+
+    # Logged separately from the manual "Sincronizar" button in the web
+    # panel (central.webapp) so /audit can tell apart what the scheduled
+    # task did on its own from what a person clicked -- without this, a
+    # device showing a fresh successful sync in the panel could be
+    # confused for the result of someone's manual click when it was
+    # actually just the timer running in the background.
+    from central.audit import log_event  # noqa: E402 (local import: avoids a hard dependency on Flask for this CLI-only path)
+    summary = "; ".join(f"{name}: {result}" for name, result in results.items())
+    session = SessionLocal()
+    try:
+        log_event(session, "sync_all", username=None, detail=summary,
+                  ip="(tarea programada)", hostname="", user_agent="")
+        session.commit()
+    finally:
+        session.close()
