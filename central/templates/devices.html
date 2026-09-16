@@ -5,7 +5,7 @@
   <span class="muted">Cada dispositivo se identifica por su número de serie (o ip:puerto si aún no se ha probado la conexión) — así renombrarlo o cambiarle la IP nunca pierde su historial.</span>
   {% if can_manage %}
   <div style="display:flex; gap:8px; flex-shrink:0;">
-    <button type="button" onclick="startSync('{{ url_for('sync_all_stream') }}', 'todos los dispositivos')">Sincronizar todos</button>
+    <button type="button" onclick="startSync('{{ url_for('sync_all_start') }}', 'todos los dispositivos')">Sincronizar todos</button>
     <a class="btn" href="{{ url_for('device_new') }}">+ Agregar dispositivo</a>
   </div>
   {% endif %}
@@ -37,7 +37,7 @@
       <form method="post" action="{{ url_for('device_test', device_pk=d.id) }}"><button type="submit">Probar conexión</button></form>
       <form method="post" action="{{ url_for('device_ping', device_pk=d.id) }}"><button type="submit" class="secondary" style="background:#0891b2;">Ping</button></form>
       <button type="button" class="secondary" style="background:#7c3aed;"
-              onclick="startSync('{{ url_for('device_sync_stream', device_pk=d.id) }}', '{{ d.name }}')">Sincronizar este</button>
+              onclick="startSync('{{ url_for('device_sync_start', device_pk=d.id) }}', '{{ d.name }}')">Sincronizar este</button>
     </div>
     <div class="btn-group">
       <form method="post" action="{{ url_for('device_restart', device_pk=d.id) }}"
@@ -78,8 +78,17 @@
 </div>
 
 <script>
-var syncEventSource = null;
-var syncWatchdog = null;
+// Live sync progress via short polls instead of one long-held connection
+// (a Server-Sent Events version of this got stuck in practice -- some
+// layer between server and browser buffered the very first message
+// indefinitely, and the "Cerrar" button had nothing reliable to hook
+// into). Polling is dumber but far more robust: every tick is a normal,
+// fast request with an immediate answer, so there's nothing to hang on,
+// and "Cerrar" never depends on any connection state at all.
+var syncPollTimer = null;
+var syncJobId = null;
+var syncStaleWarned = false;
+var SYNC_STATUS_URL_BASE = "{{ url_for('sync_job_status', job_id='__JOBID__') }}".replace('__JOBID__', '');
 
 function openSyncModal(title) {
   document.getElementById('sync-modal-title').textContent = title;
@@ -87,10 +96,14 @@ function openSyncModal(title) {
   document.getElementById('sync-modal-result').textContent = '';
   document.getElementById('sync-modal-hint').hidden = false;
   document.getElementById('sync-modal').hidden = false;
+  syncStaleWarned = false;
+}
+function stopSyncPolling() {
+  if (syncPollTimer) { clearTimeout(syncPollTimer); syncPollTimer = null; }
+  syncJobId = null;
 }
 function closeSyncModal() {
-  if (syncEventSource) { syncEventSource.close(); syncEventSource = null; }
-  if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
+  stopSyncPolling();
   document.getElementById('sync-modal').hidden = true;
   location.reload();
 }
@@ -103,49 +116,55 @@ function finishSync(msg) {
   appendSyncLog(msg);
   document.getElementById('sync-modal-result').textContent = msg;
   document.getElementById('sync-modal-hint').hidden = true;
-  if (syncEventSource) { syncEventSource.close(); syncEventSource = null; }
-  if (syncWatchdog) { clearTimeout(syncWatchdog); syncWatchdog = null; }
+  stopSyncPolling();
 }
-function armWatchdog() {
-  // Belt-and-suspenders: if the log goes silent for 3 minutes straight (a
-  // stuck socket read on the device side, a dropped connection the
-  // browser doesn't notice), stop waiting instead of leaving the modal
-  // looking frozen forever -- the server-side attempt may still finish on
-  // its own, this only stops the browser from watching it. Re-armed on
-  // every message received, so a normally slow-but-progressing sync
-  // (several devices, a big device) never trips it.
-  if (syncWatchdog) { clearTimeout(syncWatchdog); }
-  syncWatchdog = setTimeout(function() {
-    finishSync('Sin respuesta del servidor por más de 3 minutos seguidos. Puede que el dispositivo esté colgado a nivel de red -- revisa su estado más abajo en unos minutos, o inténtalo de nuevo.');
-  }, 180000);
+function pollSyncStatus(cursor) {
+  fetch(SYNC_STATUS_URL_BASE + syncJobId + '?since=' + cursor, { cache: 'no-store' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      if (!syncJobId) return; // modal was closed while this request was in flight
+      var messages = data.messages || [];
+      for (var i = 0; i < messages.length; i++) { appendSyncLog(messages[i]); syncStaleWarned = false; }
+      var nextCursor = data.cursor || cursor;
+      if (data.status === 'done') {
+        var result = data.result || {};
+        var msg;
+        if (typeof result.count !== 'undefined') {
+          msg = 'Listo: ' + result.count + ' registro(s) nuevo(s) en \'' + result.device + '\'.';
+        } else if (typeof result.summary !== 'undefined') {
+          msg = 'Listo. ' + result.summary;
+        } else {
+          msg = 'Listo.';
+        }
+        finishSync(msg);
+      } else if (data.status === 'error') {
+        finishSync('Error: ' + ((data.result && data.result.message) || 'desconocido'));
+      } else if (data.status === 'not_found') {
+        finishSync('No se encontró este proceso en el servidor (¿se reinició mientras corría?). Revisa el estado del dispositivo más abajo.');
+      } else {
+        if (messages.length === 0 && !syncStaleWarned) {
+          syncStaleWarned = true;
+          appendSyncLog('(esperando respuesta del dispositivo, puede tardar...)');
+        }
+        syncPollTimer = setTimeout(function() { pollSyncStatus(nextCursor); }, 1000);
+      }
+    })
+    .catch(function() {
+      // One failed poll (a network blip) shouldn't give up -- just retry.
+      if (syncJobId) { syncPollTimer = setTimeout(function() { pollSyncStatus(cursor); }, 2000); }
+    });
 }
-function startSync(url, title) {
+function startSync(startUrl, title) {
   openSyncModal('Sincronizando: ' + title);
-  var es = new EventSource(url);
-  syncEventSource = es;
-  armWatchdog();
-  es.addEventListener('progress', function(e) {
-    var data = JSON.parse(e.data);
-    appendSyncLog(data.message);
-    armWatchdog();
-  });
-  es.addEventListener('done', function(e) {
-    var data = JSON.parse(e.data);
-    var msg;
-    if (typeof data.count !== 'undefined') {
-      msg = 'Listo: ' + data.count + ' registro(s) nuevo(s) en \'' + data.device + '\'.';
-    } else if (typeof data.summary !== 'undefined') {
-      msg = 'Listo. ' + data.summary;
-    } else {
-      msg = 'Listo.';
-    }
-    finishSync(msg);
-  });
-  es.addEventListener('error', function(e) {
-    var msg = 'Se cortó la conexión con el servidor durante la sincronización.';
-    try { msg = 'Error: ' + JSON.parse(e.data).message; } catch (err) { /* connection-level error, no JSON payload */ }
-    finishSync(msg);
-  });
+  fetch(startUrl, { method: 'POST' })
+    .then(function(r) { return r.json(); })
+    .then(function(data) {
+      syncJobId = data.job_id;
+      pollSyncStatus(0);
+    })
+    .catch(function(err) {
+      finishSync('No se pudo iniciar la sincronización: ' + err);
+    });
 }
 function confirmClearDevice(form, deviceName) {
   var typed = prompt(

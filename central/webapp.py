@@ -12,9 +12,10 @@ import csv
 import io
 import json
 import os
-import queue
 import sys
 import threading
+import time
+import uuid
 from datetime import datetime, timedelta
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -23,7 +24,7 @@ if PROJECT_ROOT not in sys.path:
 
 from flask import (
     Flask, render_template, request, redirect, url_for, session as flask_session,
-    Response, flash, stream_with_context
+    Response, flash
 )
 from zk import const as zk_const
 
@@ -114,54 +115,75 @@ def _audit_context():
     }
 
 
-SSE_SILENCE_TIMEOUT = 180  # seconds -- see _sse_stream
+# --------------------------------------------------- sync progress jobs ---
+# A live-updating "Sincronizando..." view needs SOME way to report progress
+# back to the browser. The first version used Server-Sent Events (one
+# long-held HTTP connection streaming updates) -- it turned out too fragile
+# in practice (buffering by an intermediate layer could delay the very
+# first message indefinitely, and a stuck connection had no clean way to
+# let the user just walk away from it). This is deliberately simpler and
+# far more robust instead: the sync runs as a background job with an id,
+# and the browser polls a plain JSON status endpoint every second. Each
+# poll is a normal, short-lived request -- nothing to get stuck on, and
+# "Cerrar" never depends on any connection state at all.
+_sync_jobs = {}
+_sync_jobs_lock = threading.Lock()
+SYNC_JOB_TTL_SECONDS = 3600  # prune finished jobs after an hour so this dict doesn't grow forever
 
 
-def _sse_stream(worker):
-    """Runs `worker(progress, ctx)` in a background thread (ctx = a dict
-    from _audit_context(), since that thread has no request context of its
-    own) and yields its progress(...) calls as Server-Sent Events in real
-    time, ending with one 'done' or 'error' event. Used to drive the live
-    sync progress view instead of the browser just hanging on a blocked
-    request for a minute or two with no feedback.
+def _prune_sync_jobs():
+    cutoff = time.time() - SYNC_JOB_TTL_SECONDS
+    for job_id in [jid for jid, job in _sync_jobs.items() if job["created"] < cutoff]:
+        del _sync_jobs[job_id]
 
-    If nothing arrives for SSE_SILENCE_TIMEOUT seconds straight (a pyzk
-    socket read that hangs instead of raising -- has happened against a
-    flaky device), this gives up on watching it and ends the response
-    instead of holding the connection -- and the waitress/gunicorn worker
-    thread serving it -- open forever. The background thread itself is a
-    daemon, so it can't be killed cleanly, but it can no longer block
-    anything else once this generator returns."""
+
+def _start_sync_job(worker):
+    """Runs `worker(progress, ctx)` in a background thread and returns a
+    job id the browser can poll via /sync/status/<job_id>. `ctx` is a
+    snapshot from _audit_context(), since the background thread has no
+    Flask request context of its own to read flask_session/request from."""
     ctx = _audit_context()
-    q = queue.Queue()
+    job_id = uuid.uuid4().hex
+    with _sync_jobs_lock:
+        _prune_sync_jobs()
+        _sync_jobs[job_id] = {"messages": [], "status": "running", "result": None, "created": time.time()}
+
+    def progress(msg):
+        with _sync_jobs_lock:
+            job = _sync_jobs.get(job_id)
+            if job is not None:
+                job["messages"].append(msg)
 
     def run():
-        def progress(msg):
-            q.put(("progress", msg))
         try:
             result = worker(progress, ctx)
-            q.put(("done", result))
+            status, payload = "done", result
         except Exception as e:
-            q.put(("error", str(e)))
+            status, payload = "error", {"message": str(e)}
+        with _sync_jobs_lock:
+            job = _sync_jobs.get(job_id)
+            if job is not None:
+                job["status"] = status
+                job["result"] = payload
 
     threading.Thread(target=run, daemon=True).start()
+    return job_id
 
-    def generate():
-        while True:
-            try:
-                kind, payload = q.get(timeout=SSE_SILENCE_TIMEOUT)
-            except queue.Empty:
-                yield 'event: error\ndata: {"message": "Sin respuesta por más de 3 minutos -- el intento puede seguir en el servidor, pero se dejó de esperar aquí."}\n\n'
-                break
-            data = json.dumps(payload) if not isinstance(payload, str) else json.dumps({"message": payload})
-            yield f"event: {kind}\ndata: {data}\n\n"
-            if kind in ("done", "error"):
-                break
 
-    return Response(
-        stream_with_context(generate()), mimetype="text/event-stream",
-        headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"},
-    )
+@app.route("/sync/status/<job_id>")
+@admin_required
+def sync_job_status(job_id):
+    since = request.args.get("since", 0, type=int)
+    with _sync_jobs_lock:
+        job = _sync_jobs.get(job_id)
+        if job is None:
+            return {"status": "not_found", "messages": [], "cursor": since, "result": None}
+        return {
+            "status": job["status"],
+            "messages": job["messages"][since:],
+            "cursor": len(job["messages"]),
+            "result": job["result"],
+        }
 
 
 # ---------------------------------------------------------------- auth ----
@@ -638,12 +660,13 @@ def sync_now():
     return redirect(url_for("devices_status"))
 
 
-@app.route("/sync/stream")
+@app.route("/sync/start", methods=["POST"])
 @admin_required
-def sync_all_stream():
-    """Same as /sync but streams live progress as Server-Sent Events --
-    what the "Sincronizar todos" button actually calls, so the browser
-    shows what's happening instead of just hanging for a minute or two."""
+def sync_all_start():
+    """Same as /sync but returns immediately with a job id for the browser
+    to poll (/sync/status/<job_id>) -- what the "Sincronizar todos" button
+    actually calls, so it can show live progress instead of just hanging
+    for a minute or two."""
     def worker(progress, ctx):
         results = sync_all(progress=progress)
         summary = "; ".join(f"{name}: {result}" for name, result in results.items())
@@ -654,7 +677,7 @@ def sync_all_stream():
         finally:
             db.close()
         return {"summary": summary, "results": results}
-    return _sse_stream(worker)
+    return {"job_id": _start_sync_job(worker)}
 
 
 @app.route("/devices/<int:device_pk>/sync", methods=["POST"])
@@ -679,11 +702,12 @@ def device_sync_one(device_pk):
         db.close()
 
 
-@app.route("/devices/<int:device_pk>/sync/stream")
+@app.route("/devices/<int:device_pk>/sync/start", methods=["POST"])
 @admin_required
-def device_sync_stream(device_pk):
-    """Same as /devices/<id>/sync but streams live progress -- what the
-    "Sincronizar este" button actually calls."""
+def device_sync_start(device_pk):
+    """Same as /devices/<id>/sync but returns immediately with a job id
+    for the browser to poll -- what the "Sincronizar este" button actually
+    calls."""
     def worker(progress, ctx):
         db = SessionLocal()
         try:
@@ -702,7 +726,7 @@ def device_sync_stream(device_pk):
                 raise
         finally:
             db.close()
-    return _sse_stream(worker)
+    return {"job_id": _start_sync_job(worker)}
 
 
 @app.route("/devices/new", methods=["GET", "POST"])
