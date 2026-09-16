@@ -19,6 +19,10 @@ para el procedimiento completo de release.
 - Botón "Vaciar dispositivo": borra las marcaciones guardadas en el reloj
   físico para que empiece de cero, sin tocar el historial ya sincronizado
   en la base central. Pide escribir el nombre del equipo para confirmar.
+- Botón "Descargar respaldo": trae un CSV con TODAS las marcaciones que
+  hay ahora mismo en el equipo (no solo lo que ya está en la base
+  central) y de paso las guarda en la base central. Pensado para usar
+  justo antes de "Vaciar dispositivo", como respaldo independiente.
 - "Eliminar" un dispositivo ya no borra su historial bajo ninguna
   circunstancia -- solo lo oculta de la lista y de la sincronización, con
   un botón "Restaurar" en "Ver eliminados" para traerlo de vuelta.
@@ -55,6 +59,11 @@ para el procedimiento completo de release.
   `install.ps1` (y el botón "Reiniciar") siempre detengan el proceso
   -- incluso forzándolo si quedó colgado en una llamada de red -- antes
   de volver a levantarlo.
+- La pantalla "Usuarios" de un dispositivo (`/devices/<id>/users`) podía
+  terminar en un Internal Server Error en crudo si el equipo no
+  respondía (ej. timeout de red) -- ahora usa el mismo tope duro de 150s
+  que "Sincronizar" y muestra un mensaje claro en vez de la pantalla de
+  error de Flask.
 
 ## [1.0.0] - 2026-09-15
 

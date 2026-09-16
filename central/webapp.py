@@ -31,7 +31,7 @@ from attendance_system import ZKTecoAttendance, check_network_reachable
 from central.db import SessionLocal, init_db
 from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog
 from central.auth import login_required, admin_required, super_admin_required, verify_password, hash_password, ROLE_LABELS
-from central.sync import sync_all, sync_device
+from central.sync import sync_all, sync_device, backup_device
 from central.backup import export_data, import_data
 from central.twofa import (
     generate_secret, qr_data_uri, verify_code, new_trusted_device_token,
@@ -699,6 +699,63 @@ def device_sync_one(device_pk):
     return redirect(url_for("devices_status"))
 
 
+@app.route("/devices/<int:device_pk>/backup", methods=["POST"])
+@admin_required
+def device_backup(device_pk):
+    """Descarga un CSV con TODAS las marcaciones que hay ahora mismo EN
+    EL EQUIPO (no lo que ya está en la base central), y de paso asegura
+    que la base central también las tenga (mismo dedup que 'Sincronizar').
+    Pensado para usarse justo antes de 'Vaciar dispositivo': el archivo
+    queda como respaldo independiente, sin depender de confiar en la base
+    central."""
+    ctx = _audit_context()
+    db = SessionLocal()
+    try:
+        device_name = (db.get(Device, device_pk) or abort_404()).name
+    finally:
+        db.close()
+
+    def work():
+        db2 = SessionLocal()
+        try:
+            device = db2.get(Device, device_pk)
+            try:
+                raw, new_count = backup_device(db2, device)
+                total = 0 if raw is None else len(raw)
+                log_event(db2, "device_backup", target=device.name,
+                          detail=f"{total} registro(s) en el equipo, {new_count} nuevo(s) guardado(s) en la base central", **ctx)
+                db2.commit()
+                return raw
+            except Exception as e:
+                db2.rollback()
+                log_event(db2, "device_backup", target=device.name, detail=f"ERROR: {e}", **ctx)
+                db2.commit()
+                raise
+        finally:
+            db2.close()
+
+    try:
+        raw = run_with_hard_timeout(work)
+    except TimeoutError as e:
+        flash(f"'{device_name}': {e}")
+        return redirect(url_for("devices_status"))
+    except Exception as e:
+        flash(f"Error generando respaldo de '{device_name}': {e}")
+        return redirect(url_for("devices_status"))
+
+    if raw is None or raw.empty:
+        flash(f"'{device_name}' no tiene marcaciones guardadas en el equipo ahora mismo -- no hay nada que respaldar.")
+        return redirect(url_for("devices_status"))
+
+    buf = io.StringIO()
+    raw.to_csv(buf, index=False)
+    filename = f"respaldo_{device_name}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+    return Response(
+        buf.getvalue(), mimetype="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={filename}"},
+    )
+
+
 @app.route("/devices/new", methods=["GET", "POST"])
 @admin_required
 def device_new():
@@ -951,15 +1008,33 @@ def device_users(device_pk):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        system = _connect_to(device)
+        device_name = device.name
+        device_ip, device_port, comm_password = device.ip, device.port, device.comm_password
+    finally:
+        db.close()
+
+    def work():
+        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
         system.connect()
         if not system.conn:
-            flash(f"No se pudo conectar a '{device.name}' para listar usuarios.")
-            return redirect(url_for("devices_status"))
+            raise RuntimeError("no respondió")
         try:
-            users = system.list_device_users()
+            return system.list_device_users()
         finally:
             system.disconnect()
+
+    try:
+        users = run_with_hard_timeout(work)
+    except TimeoutError as e:
+        flash(f"'{device_name}': {e}")
+        return redirect(url_for("devices_status"))
+    except Exception as e:
+        flash(f"No se pudo conectar a '{device_name}' para listar usuarios: {e}")
+        return redirect(url_for("devices_status"))
+
+    db = SessionLocal()
+    try:
+        device = db.get(Device, device_pk) or abort_404()
         for u in users:
             u['privilege_label'] = PRIVILEGE_LABELS.get(u['privilege'], str(u['privilege']))
             mapped = db.query(EmployeeMap).filter(

@@ -34,15 +34,18 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     estilo, filtros y auto-ancho) o PDF (con encabezado, franjas y pie de
     página con paginación).
   - **Dispositivos**: tarjetas por equipo (no una tabla apretada) con
-    Editar, Usuarios, Probar conexión, Ping, Reiniciar, Apagar, **Vaciar
-    dispositivo** y **Eliminar** (nunca borra el historial -- solo oculta
-    el dispositivo, con un botón "Restaurar" en "Ver eliminados"). Los
-    botones "Sincronizar todos"/"Sincronizar este" se deshabilitan
-    mientras trabajan y muestran el resultado al terminar (cuántos
-    registros nuevos, o el error) -- una versión anterior con una ventana
-    de progreso en vivo resultó demasiado frágil en la práctica y se
-    volvió a este diseño más simple, con el mismo tope duro de 150s por
-    si el dispositivo se cuelga.
+    Editar, Usuarios, Probar conexión, Ping, Reiniciar, Apagar, **Descargar
+    respaldo**, **Vaciar dispositivo** y **Eliminar** (nunca borra el
+    historial -- solo oculta el dispositivo, con un botón "Restaurar" en
+    "Ver eliminados"). Los botones "Sincronizar todos"/"Sincronizar este"
+    se deshabilitan mientras trabajan y muestran el resultado al terminar
+    (cuántos registros nuevos, o el error) -- una versión anterior con una
+    ventana de progreso en vivo resultó demasiado frágil en la práctica y
+    se volvió a este diseño más simple, con el mismo tope duro de 150s por
+    si el dispositivo se cuelga. Ese mismo tope protege "Usuarios",
+    "Sincronizar" y "Descargar respaldo" -- ninguno se queda esperando
+    para siempre ni tumba la página con un error 500 si el equipo no
+    responde.
   - **Usuarios de un dispositivo** (`/devices/<id>/users`): lista en vivo
     quién está enrolado en ESE reloj físico, con alta/edición/baja directa
     (busca por ID/DNI, apellido o código) — escribe en el equipo real vía
@@ -162,6 +165,18 @@ central: cada corrida compara lo descargado contra lo que ya existe
 (por dispositivo + id + fecha/hora exacta) e inserta solo lo que falta.
 En la práctica esto ya equivale a una "sincronización completa" cada vez
 que se corre -- no hace falta un botón aparte para eso.
+
+## Respaldar un dispositivo antes de vaciarlo
+
+Botón **Descargar respaldo** en cada tarjeta. Se conecta una sola vez al
+equipo, descarga TODAS las marcaciones que tiene guardadas ahora mismo
+(no solo las que faltan por sincronizar) y hace dos cosas con ellas: las
+guarda en la base central igual que "Sincronizar" (dedup por
+`device_user_id` + `timestamp`, nunca duplica), y además te entrega un
+CSV descargable con ese mismo contenido como respaldo independiente. La
+idea es no depender solo de confiar en el dedup de la base central justo
+antes de un "Vaciar dispositivo" -- el archivo queda como evidencia de lo
+que había en el reloj en ese momento exacto.
 
 ## Vaciar un dispositivo (empezar de cero)
 

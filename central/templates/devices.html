@@ -58,6 +58,10 @@
       </form>
     </div>
     <div class="btn-group">
+      <form method="post" action="{{ url_for('device_backup', device_pk=d.id) }}"
+            onsubmit="this.querySelector('button').disabled=true; this.querySelector('button').textContent='Generando respaldo...';">
+        <button type="submit" class="secondary" style="background:#0d9488;" title="Descarga un CSV con TODAS las marcaciones que hay ahora mismo en el equipo, y de paso asegura que la base central también las tenga. Úsalo antes de 'Vaciar dispositivo'.">Descargar respaldo</button>
+      </form>
       <form method="post" action="{{ url_for('device_clear_attendance', device_pk=d.id) }}"
             onsubmit="return confirmClearDevice(this, '{{ d.name }}');">
         <input type="hidden" name="confirm_name" value="">

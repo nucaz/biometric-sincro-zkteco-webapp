@@ -30,15 +30,13 @@ def _noop(msg):
     pass
 
 
-def sync_device(session, device: Device, progress=None) -> int:
-    """Pull all punches currently on `device` (always the device's FULL
-    current log -- the ZK protocol has no "since X" query, there's nothing
-    partial to ask for) and insert the ones not already in the central DB.
-    Returns how many new rows were inserted. Retries a couple of times on
-    transient protocol errors (e.g. "TCP packet invalid") before giving up
-    and recording the failure. `progress(msg)`, if given, is called with a
-    short status line at each stage -- used to drive the live progress
-    view in the web panel."""
+def _pull_raw_with_retry(device: Device, progress=None):
+    """Connects to `device` and downloads its full current attendance log
+    (always ALL of it -- the ZK protocol has no "since X" query, there's
+    nothing partial to ask for), retrying a couple of times on transient
+    protocol errors (e.g. "TCP packet invalid") before giving up. Returns
+    the raw DataFrame (or None if the device genuinely has zero records
+    right now) -- does NOT touch the central DB."""
     progress = progress or _noop
     raw = None
     last_error = None
@@ -70,10 +68,16 @@ def sync_device(session, device: Device, progress=None) -> int:
             time.sleep(RETRY_DELAY_SECONDS)
 
     if last_error is not None:
-        device.last_synced_at = utcnow()
-        device.last_sync_status = f"Error tras {MAX_ATTEMPTS} intentos: {last_error}"
-        session.commit()
         raise RuntimeError(last_error)
+    return raw
+
+
+def _insert_new_rows(session, device: Device, raw, progress=None) -> int:
+    """Dedup-insert `raw` (a DataFrame from `_pull_raw_with_retry`) into
+    `attendance_log` by (device, device_user_id, timestamp), and update
+    the device's last-sync bookkeeping. Returns how many rows were
+    actually new (records already present are silently skipped)."""
+    progress = progress or _noop
 
     if raw is None or raw.empty:
         progress(f"'{device.name}' no tiene marcaciones nuevas que descargar (0 en el dispositivo o ya estaban todas).")
@@ -117,6 +121,42 @@ def sync_device(session, device: Device, progress=None) -> int:
     session.commit()
     progress(f"Listo: {len(new_rows)} nuevo(s) de {total_pulled} descargado(s) del dispositivo.")
     return len(new_rows)
+
+
+def sync_device(session, device: Device, progress=None) -> int:
+    """Pull all punches currently on `device` and insert the ones not
+    already in the central DB. Returns how many new rows were inserted.
+    `progress(msg)`, if given, is called with a short status line at each
+    stage -- used to drive the live progress view in the web panel."""
+    progress = progress or _noop
+    try:
+        raw = _pull_raw_with_retry(device, progress)
+    except RuntimeError as e:
+        device.last_synced_at = utcnow()
+        device.last_sync_status = f"Error tras {MAX_ATTEMPTS} intentos: {e}"
+        session.commit()
+        raise
+    return _insert_new_rows(session, device, raw, progress)
+
+
+def backup_device(session, device: Device, progress=None):
+    """Like `sync_device` (one connection to the device, same dedup-insert
+    of anything new into the central DB so nothing is lost), but also
+    returns the raw DataFrame of EVERY punch currently stored on the
+    physical device -- meant to be handed to the user as a downloadable
+    file right before "Vaciar dispositivo", as an independent snapshot
+    that doesn't depend on trusting the central DB's dedup logic. Returns
+    (raw_dataframe_or_None, new_rows_inserted)."""
+    progress = progress or _noop
+    try:
+        raw = _pull_raw_with_retry(device, progress)
+    except RuntimeError as e:
+        device.last_synced_at = utcnow()
+        device.last_sync_status = f"Error tras {MAX_ATTEMPTS} intentos: {e}"
+        session.commit()
+        raise
+    new_count = _insert_new_rows(session, device, raw, progress)
+    return raw, new_count
 
 
 def sync_all(progress=None) -> dict:
