@@ -127,6 +127,9 @@ def _device_is_trusted(db, user):
     ).first() is not None
 
 
+MAX_LOGIN_ATTEMPTS = 3
+
+
 @app.route("/login", methods=["GET", "POST"])
 def login():
     if request.method == "POST":
@@ -134,7 +137,16 @@ def login():
         try:
             attempted_username = request.form.get("username", "").strip()
             user = db.query(User).filter(User.username == attempted_username).first()
+
+            if user and user.locked:
+                _audit(db, "login_blocked", username=user.username, detail="cuenta bloqueada por intentos fallidos")
+                flash("Esta cuenta está bloqueada por demasiados intentos fallidos. Pide a un super administrador que la desbloquee en Cuentas.")
+                return render_template("login.html")
+
             if user and user.active and verify_password(request.form.get("password", ""), user.password_hash):
+                if user.failed_login_attempts:
+                    user.failed_login_attempts = 0
+                    db.commit()
                 next_url = request.args.get("next") or url_for("dashboard")
                 if user.totp_enabled and not _device_is_trusted(db, user):
                     flask_session["pending_2fa_user_id"] = user.id
@@ -143,9 +155,26 @@ def login():
                 _finish_login(user)
                 _audit(db, "login", detail="sin 2FA (no activado o equipo recordado)")
                 return redirect(next_url)
-            _audit(db, "login_failed", username=attempted_username or None,
-                   detail="usuario inactivo" if (user and not user.active) else "usuario o contraseña incorrectos")
-            flash("Usuario o contraseña incorrectos.")
+
+            if user and user.active:
+                # Only a real, active account can be locked -- an unknown
+                # username or an already-disabled account doesn't count
+                # attempts, there's nothing there to protect by locking it.
+                user.failed_login_attempts = (user.failed_login_attempts or 0) + 1
+                if user.failed_login_attempts >= MAX_LOGIN_ATTEMPTS:
+                    user.locked = True
+                    db.commit()
+                    _audit(db, "account_locked", username=user.username, detail=f"{MAX_LOGIN_ATTEMPTS} intentos fallidos seguidos")
+                    flash(f"Cuenta bloqueada tras {MAX_LOGIN_ATTEMPTS} intentos fallidos. Pide a un super administrador que la desbloquee en Cuentas.")
+                else:
+                    remaining = MAX_LOGIN_ATTEMPTS - user.failed_login_attempts
+                    db.commit()
+                    _audit(db, "login_failed", username=user.username, detail=f"contraseña incorrecta ({remaining} intento(s) restante(s))")
+                    flash(f"Usuario o contraseña incorrectos. Te queda(n) {remaining} intento(s) antes de que se bloquee la cuenta.")
+            else:
+                _audit(db, "login_failed", username=attempted_username or None,
+                       detail="usuario inactivo" if (user and not user.active) else "usuario no encontrado")
+                flash("Usuario o contraseña incorrectos.")
         finally:
             db.close()
     return render_template("login.html")
@@ -1204,6 +1233,25 @@ def user_reset_2fa(user_pk):
         db.commit()
         _audit(db, "account_reset_2fa", target=user.username)
         flash(f"2FA desactivado para '{user.username}'. Puede iniciar sesión solo con su contraseña.")
+        return redirect(url_for("users_list"))
+    finally:
+        db.close()
+
+
+@app.route("/users/<int:user_pk>/unlock", methods=["POST"])
+@super_admin_required
+def user_unlock(user_pk):
+    """Clears a lockout from MAX_LOGIN_ATTEMPTS failed passwords in a row
+    -- the only way back in for that account short of a super_admin doing
+    this, by design (see login())."""
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_pk) or abort_404()
+        user.locked = False
+        user.failed_login_attempts = 0
+        db.commit()
+        _audit(db, "account_unlock", target=user.username)
+        flash(f"Cuenta '{user.username}' desbloqueada.")
         return redirect(url_for("users_list"))
     finally:
         db.close()

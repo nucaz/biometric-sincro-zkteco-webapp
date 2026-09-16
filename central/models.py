@@ -100,6 +100,8 @@ class User(Base):
     active = Column(Boolean, nullable=False, default=True)
     totp_secret = Column(String(64), nullable=True)
     totp_enabled = Column(Boolean, nullable=False, default=False)
+    failed_login_attempts = Column(Integer, nullable=False, default=0)
+    locked = Column(Boolean, nullable=False, default=False)  # true after too many failed attempts in a row; only a super_admin can clear this
     created_at = Column(DateTime, default=utcnow, nullable=False)
 
     trusted_devices = relationship("TrustedDevice", back_populates="user")

@@ -12,9 +12,22 @@
     <tr>
       <td>{{ u.username }}</td>
       <td>{{ {'super_admin': 'Super administrador', 'admin': 'Administrador', 'viewer': 'Solo lectura'}.get(u.role, u.role) }}</td>
-      <td>{% if u.active %}Activo{% else %}<span class="badge warn">Inactivo</span>{% endif %}</td>
+      <td>
+        {% if u.locked %}
+          <span class="badge warn">Bloqueada ({{ u.failed_login_attempts }} intentos fallidos)</span>
+        {% elif u.active %}
+          Activo
+        {% else %}
+          <span class="badge warn">Inactivo</span>
+        {% endif %}
+      </td>
       <td>{% if u.totp_enabled %}Activado{% else %}-{% endif %}</td>
       <td class="btn-group">
+        {% if u.locked %}
+        <form class="inline-form" method="post" action="{{ url_for('user_unlock', user_pk=u.id) }}">
+          <button type="submit" class="btn">Desbloquear</button>
+        </form>
+        {% endif %}
         <form class="inline-form" method="post" action="{{ url_for('user_toggle', user_pk=u.id) }}">
           <button type="submit" class="btn secondary">{{ 'Desactivar' if u.active else 'Activar' }}</button>
         </form>
