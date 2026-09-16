@@ -6,6 +6,7 @@ punches are skipped by (device, device_user_id, timestamp).
 """
 import os
 import sys
+import time
 
 PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
@@ -15,25 +16,51 @@ from attendance_system import ZKTecoAttendance  # noqa: E402
 from central.db import SessionLocal, init_db  # noqa: E402
 from central.models import Device, AttendanceLog, utcnow  # noqa: E402
 
+# Pulling the full attendance log is a much bigger transfer than a quick
+# "probar conexion" handshake -- some devices (flaky link, VPN between
+# sedes, a large backlog) need more than the 5s default timeout, and an
+# occasional "TCP packet invalid" mid-transfer is usually transient and
+# resolves itself on a clean retry rather than being a real device fault.
+SYNC_TIMEOUT_SECONDS = 20
+MAX_ATTEMPTS = 3
+RETRY_DELAY_SECONDS = 3
+
 
 def sync_device(session, device: Device) -> int:
     """Pull all punches currently on `device` and insert the ones we don't
-    already have. Returns how many new rows were inserted."""
-    system = ZKTecoAttendance(device.ip, port=device.port, password=device.comm_password or 0)
-    system.connect()
-    if not system.conn:
-        device.last_synced_at = utcnow()
-        device.last_sync_status = "Connection failed"
-        session.commit()
-        return 0
+    already have. Returns how many new rows were inserted. Retries a couple
+    of times on transient protocol errors (e.g. "TCP packet invalid")
+    before giving up and recording the failure."""
+    raw = None
+    last_error = None
+    for attempt in range(1, MAX_ATTEMPTS + 1):
+        system = ZKTecoAttendance(
+            device.ip, port=device.port, password=device.comm_password or 0,
+            timeout=SYNC_TIMEOUT_SECONDS,
+        )
+        try:
+            system.connect()
+            if not system.conn:
+                last_error = "Connection failed"
+                raise RuntimeError(last_error)
+            raw = system.get_raw_attendance(device_name=device.name)
+            model = system.device_info.get('model', '').strip()
+            if model and model != device.model:
+                device.model = model
+            last_error = None
+            break
+        except Exception as e:
+            last_error = str(e)
+        finally:
+            system.disconnect()
+        if attempt < MAX_ATTEMPTS:
+            time.sleep(RETRY_DELAY_SECONDS)
 
-    try:
-        raw = system.get_raw_attendance(device_name=device.name)
-        model = system.device_info.get('model', '').strip()
-        if model and model != device.model:
-            device.model = model
-    finally:
-        system.disconnect()
+    if last_error is not None:
+        device.last_synced_at = utcnow()
+        device.last_sync_status = f"Error tras {MAX_ATTEMPTS} intentos: {last_error}"
+        session.commit()
+        raise RuntimeError(last_error)
 
     if raw is None or raw.empty:
         device.last_synced_at = utcnow()

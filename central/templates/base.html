@@ -60,6 +60,7 @@
     {% if is_super_admin %}
     <a href="{{ url_for('users_list') }}">Cuentas</a>
     <a href="{{ url_for('backup_page') }}">Backup</a>
+    <a href="{{ url_for('audit_log') }}">Auditoría</a>
     {% endif %}
     <a href="{{ url_for('account_security') }}">Seguridad</a>
     <span class="badge role">{{ current_role_label }}</span>

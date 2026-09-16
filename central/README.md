@@ -22,6 +22,12 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
 - `create_admin.py` — crea/actualiza una cuenta de acceso al panel.
 - `backup.py` — export/import completo de la base en JSON (portable entre
   SQLite/PostgreSQL/MySQL), usado por la pantalla Backup del panel.
+- `audit.py` + tabla `audit_log` — registro de conexiones (login, 2FA,
+  ping/probar conexión) y cambios (dispositivos, empleados, cuentas,
+  backup), con IP y, cuando la red lo permite, el nombre de la PC por DNS
+  inverso. Ver la pantalla **Auditoría** (solo super admin). Nunca se
+  edita ni se borra desde la aplicación, y sobrevive a un restore de
+  backup (no está entre las tablas que `backup.py` toca).
 - `webapp.py` — dashboard Flask:
   - **Marcaciones**: filtra por sede/dispositivo/fecha/nombre, dos vistas
     (resumen por día o marcaciones crudas), exporta a CSV, Excel (con
@@ -114,6 +120,31 @@ corrida solo inserta lo nuevo.
    número de serie reales (así se identifica de forma estable aunque
    cambie de IP después).
 3. La siguiente corrida de `central.sync` ya lo incluye automáticamente.
+
+## Cómo se identifica el equipo (PC) de quien inicia sesión
+
+Un navegador no puede reportar el nombre Windows de su propia PC -- ninguna
+API web lo expone, por diseño de privacidad. Lo que sí se captura en cada
+login: la IP del cliente (siempre) y, mejor esfuerzo, su nombre por DNS
+inverso sobre esa IP. En una red con Active Directory/DNS interno con
+registro automático (lo normal en un dominio Windows), esto resuelve al
+nombre real de la PC; en una red plana sin esos registros, simplemente
+queda vacío y solo se ve la IP. Se resuelve una sola vez por sesión (al
+hacer login) y se reusa para el resto de esa sesión, no en cada clic.
+
+## Por qué "TCP packet invalid" podía tumbar una sincronización entera
+
+Encontrado sincronizando un K20 real (PISO2) que fallaba de forma
+intermitente: cuando la descarga masiva de marcaciones se corrompía a
+mitad de camino (paquete de red perdido, timeout corto), el propio
+`disconnect()` de limpieza *también* fallaba al intentar leer la
+confirmación del comando -- y esa segunda falla, sin capturar, tapaba el
+error real y abortaba todo el intento sin reintentarlo. Corregido en
+`attendance_system.py` (`disconnect()` ya no puede tumbar al que lo llama)
+y en `sync.py` (reintenta hasta 3 veces con un timeout de 20s para la
+descarga masiva, en vez de los 5s por defecto de una conexión rápida).
+Confirmado con una sincronización real contra PISO2: 102 marcaciones
+nuevas, sin error, tras timeouts previos en el mismo dispositivo.
 
 ## Pendiente para producción real
 

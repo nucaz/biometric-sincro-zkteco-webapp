@@ -105,6 +105,23 @@ class User(Base):
     trusted_devices = relationship("TrustedDevice", back_populates="user")
 
 
+class AuditLog(Base):
+    """Who did what, from where. Written on every login (success/failure)
+    and every write action (device/employee/user/backup changes) -- never
+    edited or deleted through the app itself, only appended to."""
+    __tablename__ = "audit_log"
+
+    id = Column(Integer, primary_key=True)
+    timestamp = Column(DateTime, default=utcnow, nullable=False)
+    username = Column(String(64), nullable=True)  # null for a failed login with an unknown/bad username
+    action = Column(String(64), nullable=False)  # e.g. 'login', 'login_failed', 'device_add', 'device_sync', ...
+    target = Column(String(200), nullable=True)  # what it acted on, e.g. a device or employee name
+    detail = Column(Text, nullable=True)  # extra context, e.g. an error message or what changed
+    ip_address = Column(String(64), nullable=True)
+    hostname = Column(String(200), nullable=True)  # best-effort reverse DNS of ip_address, see central/audit.py
+    user_agent = Column(String(255), nullable=True)
+
+
 class TrustedDevice(Base):
     """A browser that skipped OTP on its last login because it already
     proved the 6-digit code once. Identified by the hash of a random

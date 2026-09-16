@@ -43,11 +43,20 @@ class ZKTecoAttendance:
 
     def disconnect(self):
         if self.conn:
-            self.conn.disconnect()
-            print("Disconnected from device")
-            self.conn = None
-            self.users = {}
-            self.device_info = {}
+            try:
+                self.conn.disconnect()
+                print("Disconnected from device")
+            except Exception as e:
+                # A device that just had a corrupted/large transfer can also
+                # fail the disconnect handshake itself (e.g. "TCP packet
+                # invalid") -- that failure doesn't mean anything is still
+                # open on our end, so don't let it crash whatever the caller
+                # was doing (it's usually cleanup in a finally block).
+                print(f"Warning: error while disconnecting ({e}) -- dropping the connection anyway")
+            finally:
+                self.conn = None
+                self.users = {}
+                self.device_info = {}
 
     def restart_device(self):
         """Reboot the terminal remotely. Ends the current connection (the
@@ -151,154 +160,151 @@ class ZKTecoAttendance:
         return punch_map.get(punch, f"Unknown Punch ({punch})")
 
     def get_raw_attendance(self, start_date=None, end_date=None, device_name=None):
-        """Return each individual punch (no check-in/check-out grouping)."""
+        """Return each individual punch (no check-in/check-out grouping).
+        Raises on a real transfer/protocol error (e.g. "TCP packet invalid")
+        instead of swallowing it -- the caller needs to tell that apart from
+        "the device genuinely has zero records" to retry or report it."""
         if not self.conn:
             print("Not connected to device. Please connect first.")
             return None
-        try:
-            attendance = self.conn.get_attendance()
-            if not attendance:
-                print("No attendance records found")
-                return None
-
-            if start_date and not isinstance(start_date, datetime):
-                start_date = datetime.combine(start_date, time.min)
-            if end_date and not isinstance(end_date, datetime):
-                end_date = datetime.combine(end_date, time.max)
-
-            raw_records = []
-            for att in attendance:
-                dt = att.timestamp
-                if start_date and end_date:
-                    if not (start_date <= dt <= end_date):
-                        continue
-                user_name = self.users.get(att.user_id, "Unknown")
-                raw_records.append({
-                    'user_id': att.user_id,
-                    'user_name': user_name,
-                    'timestamp': dt,
-                    'status': self.get_attendance_status(att.punch),
-                    'device_name': device_name or 'Unknown'
-                })
-
-            df = pd.DataFrame(raw_records)
-            if df.empty:
-                return None
-            df = df.sort_values(['timestamp'])
-            return df
-        except Exception as e:
-            print(f"Error retrieving raw attendance records: {str(e)}")
+        attendance = self.conn.get_attendance()
+        if not attendance:
+            print("No attendance records found")
             return None
+
+        if start_date and not isinstance(start_date, datetime):
+            start_date = datetime.combine(start_date, time.min)
+        if end_date and not isinstance(end_date, datetime):
+            end_date = datetime.combine(end_date, time.max)
+
+        raw_records = []
+        for att in attendance:
+            dt = att.timestamp
+            if start_date and end_date:
+                if not (start_date <= dt <= end_date):
+                    continue
+            user_name = self.users.get(att.user_id, "Unknown")
+            raw_records.append({
+                'user_id': att.user_id,
+                'user_name': user_name,
+                'timestamp': dt,
+                'status': self.get_attendance_status(att.punch),
+                'device_name': device_name or 'Unknown'
+            })
+
+        df = pd.DataFrame(raw_records)
+        if df.empty:
+            return None
+        df = df.sort_values(['timestamp'])
+        return df
 
     def get_attendance(self, start_date=None, end_date=None):
+        """Raises on a real transfer/protocol error instead of swallowing
+        it -- see get_raw_attendance for why."""
         if not self.conn:
             print("Not connected to device. Please connect first.")
             return None
-        try:
-            attendance = self.conn.get_attendance()
-            if not attendance:
-                print("No attendance records found")
-                return None
-
-            print(f"Retrieved {len(attendance)} attendance records")
-            
-            # Convert dates to datetime objects if they're not already
-            if start_date and not isinstance(start_date, datetime):
-                start_date = datetime.combine(start_date, time.min)
-            if end_date and not isinstance(end_date, datetime):
-                end_date = datetime.combine(end_date, time.max)
-
-            # First, collect all records
-            raw_records = []
-            for att in attendance:
-                dt = att.timestamp
-                if start_date and end_date:
-                    if not (start_date <= dt <= end_date):
-                        continue
-                user_name = self.users.get(att.user_id, "Unknown")
-                raw_records.append({
-                    'user_id': att.user_id,
-                    'user_name': user_name,
-                    'timestamp': dt,
-                    'raw_status': att.status,
-                    'punch': att.punch,
-                    'status': self.get_attendance_status(att.punch)
-                })
-
-            # Convert to DataFrame for easier manipulation
-            df = pd.DataFrame(raw_records)
-            if df.empty:
-                return None
-
-            # Sort by user_id and timestamp
-            df = df.sort_values(['user_id', 'timestamp'])
-
-            # Group records by user and date
-            grouped_records = []
-            current_user = None
-            current_date = None
-            check_in = None
-            check_out = None
-
-            for _, row in df.iterrows():
-                user_id = row['user_id']
-                user_name = row['user_name']
-                timestamp = row['timestamp']
-                date = timestamp.date()
-                punch = row['punch']
-
-                # If new user or new date, save previous record and start new one
-                if current_user != user_id or current_date != date:
-                    if current_user is not None and (check_in is not None or check_out is not None):
-                        grouped_records.append({
-                            'user_id': current_user,
-                            'user_name': current_user_name,
-                            'date': current_date,
-                            'check_in': check_in,
-                            'check_out': check_out
-                        })
-                    current_user = user_id
-                    current_user_name = user_name
-                    current_date = date
-                    check_in = None
-                    check_out = None
-
-                # Update check-in or check-out time
-                if punch == 0:  # Check In
-                    check_in = timestamp
-                elif punch == 1:  # Check Out
-                    check_out = timestamp
-
-            # Add the last record
-            if current_user is not None and (check_in is not None or check_out is not None):
-                grouped_records.append({
-                    'user_id': current_user,
-                    'user_name': current_user_name,
-                    'date': current_date,
-                    'check_in': check_in,
-                    'check_out': check_out
-                })
-
-            # Convert to DataFrame
-            result_df = pd.DataFrame(grouped_records)
-            
-            # Calculate duration if both check-in and check-out are present
-            if not result_df.empty:
-                result_df['duration'] = result_df.apply(
-                    lambda row: (row['check_out'] - row['check_in']).total_seconds() / 3600
-                    if pd.notnull(row['check_out']) and pd.notnull(row['check_in']) else None,
-                    axis=1
-                )
-
-            print(f"\nGrouped into {len(result_df)} attendance records")
-            if not result_df.empty:
-                print("\nSample of grouped records:")
-                print(result_df.head())
-            return result_df
-
-        except Exception as e:
-            print(f"Error retrieving attendance records: {str(e)}")
+        attendance = self.conn.get_attendance()
+        if not attendance:
+            print("No attendance records found")
             return None
+
+        print(f"Retrieved {len(attendance)} attendance records")
+
+        # Convert dates to datetime objects if they're not already
+        if start_date and not isinstance(start_date, datetime):
+            start_date = datetime.combine(start_date, time.min)
+        if end_date and not isinstance(end_date, datetime):
+            end_date = datetime.combine(end_date, time.max)
+
+        # First, collect all records
+        raw_records = []
+        for att in attendance:
+            dt = att.timestamp
+            if start_date and end_date:
+                if not (start_date <= dt <= end_date):
+                    continue
+            user_name = self.users.get(att.user_id, "Unknown")
+            raw_records.append({
+                'user_id': att.user_id,
+                'user_name': user_name,
+                'timestamp': dt,
+                'raw_status': att.status,
+                'punch': att.punch,
+                'status': self.get_attendance_status(att.punch)
+            })
+
+        # Convert to DataFrame for easier manipulation
+        df = pd.DataFrame(raw_records)
+        if df.empty:
+            return None
+
+        # Sort by user_id and timestamp
+        df = df.sort_values(['user_id', 'timestamp'])
+
+        # Group records by user and date
+        grouped_records = []
+        current_user = None
+        current_date = None
+        check_in = None
+        check_out = None
+
+        for _, row in df.iterrows():
+            user_id = row['user_id']
+            user_name = row['user_name']
+            timestamp = row['timestamp']
+            date = timestamp.date()
+            punch = row['punch']
+
+            # If new user or new date, save previous record and start new one
+            if current_user != user_id or current_date != date:
+                if current_user is not None and (check_in is not None or check_out is not None):
+                    grouped_records.append({
+                        'user_id': current_user,
+                        'user_name': current_user_name,
+                        'date': current_date,
+                        'check_in': check_in,
+                        'check_out': check_out
+                    })
+                current_user = user_id
+                current_user_name = user_name
+                current_date = date
+                check_in = None
+                check_out = None
+
+            # Update check-in or check-out time
+            if punch == 0:  # Check In
+                check_in = timestamp
+            elif punch == 1:  # Check Out
+                check_out = timestamp
+
+        # Add the last record
+        if current_user is not None and (check_in is not None or check_out is not None):
+            grouped_records.append({
+                'user_id': current_user,
+                'user_name': current_user_name,
+                'date': current_date,
+                'check_in': check_in,
+                'check_out': check_out
+            })
+
+        # Convert to DataFrame
+        result_df = pd.DataFrame(grouped_records)
+
+        # Calculate duration if both check-in and check-out are present
+        if not result_df.empty:
+            result_df['duration'] = result_df.apply(
+                lambda row: (row['check_out'] - row['check_in']).total_seconds() / 3600
+                if pd.notnull(row['check_out']) and pd.notnull(row['check_in']) else None,
+                axis=1
+            )
+
+        print(f"\nGrouped into {len(result_df)} attendance records")
+        if not result_df.empty:
+            print("\nSample of grouped records:")
+            print(result_df.head())
+        return result_df
+
 
 def main():
     device_ip = "192.168.1.201"  # Replace with your device's IP address

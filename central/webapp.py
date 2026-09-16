@@ -27,7 +27,7 @@ from zk import const as zk_const
 
 from attendance_system import ZKTecoAttendance, check_network_reachable
 from central.db import SessionLocal, init_db
-from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice
+from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog
 from central.auth import login_required, admin_required, super_admin_required, verify_password, hash_password, ROLE_LABELS
 from central.sync import sync_all, sync_device
 from central.backup import export_data, import_data
@@ -35,6 +35,7 @@ from central.twofa import (
     generate_secret, qr_data_uri, verify_code, new_trusted_device_token,
     hash_token, trusted_device_expiry, TRUSTED_DEVICE_COOKIE, TRUSTED_DEVICE_DAYS,
 )
+from central.audit import log_event, resolve_hostname, client_ip, client_user_agent
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
@@ -74,6 +75,30 @@ def inject_role():
     }
 
 
+# -------------------------------------------------------------- audit ----
+
+def _audit(db, action, target=None, detail=None, username=None):
+    """Append one audit_log row using the client info cached on this
+    session at login time (so a reverse-DNS lookup only happens once per
+    session, not on every click) -- falls back to a fresh lookup for
+    events that happen outside a session, like a failed login."""
+    ip = flask_session.get("client_ip")
+    if ip is None:
+        ip = client_ip()
+        hostname = resolve_hostname(ip)
+        user_agent = client_user_agent()
+    else:
+        hostname = flask_session.get("client_hostname")
+        user_agent = flask_session.get("client_user_agent")
+    log_event(
+        db, action,
+        username=username or flask_session.get("username"),
+        target=target, detail=detail,
+        ip=ip, hostname=hostname, user_agent=user_agent,
+    )
+    db.commit()
+
+
 # ---------------------------------------------------------------- auth ----
 
 def _finish_login(user, remember_next_url=None):
@@ -82,6 +107,12 @@ def _finish_login(user, remember_next_url=None):
     flask_session["username"] = user.username
     flask_session.pop("pending_2fa_user_id", None)
     flask_session.pop("pending_2fa_next", None)
+    ip = client_ip()
+    flask_session["client_ip"] = ip
+    # Best-effort PC name via reverse DNS -- see central/audit.py for why a
+    # browser can't just report its Windows computer name directly.
+    flask_session["client_hostname"] = resolve_hostname(ip)
+    flask_session["client_user_agent"] = client_user_agent()
 
 
 def _device_is_trusted(db, user):
@@ -101,7 +132,8 @@ def login():
     if request.method == "POST":
         db = SessionLocal()
         try:
-            user = db.query(User).filter(User.username == request.form.get("username", "").strip()).first()
+            attempted_username = request.form.get("username", "").strip()
+            user = db.query(User).filter(User.username == attempted_username).first()
             if user and user.active and verify_password(request.form.get("password", ""), user.password_hash):
                 next_url = request.args.get("next") or url_for("dashboard")
                 if user.totp_enabled and not _device_is_trusted(db, user):
@@ -109,7 +141,10 @@ def login():
                     flask_session["pending_2fa_next"] = next_url
                     return redirect(url_for("verify_2fa"))
                 _finish_login(user)
+                _audit(db, "login", detail="sin 2FA (no activado o equipo recordado)")
                 return redirect(next_url)
+            _audit(db, "login_failed", username=attempted_username or None,
+                   detail="usuario inactivo" if (user and not user.active) else "usuario o contraseña incorrectos")
             flash("Usuario o contraseña incorrectos.")
         finally:
             db.close()
@@ -133,8 +168,10 @@ def verify_2fa():
             if verify_code(user.totp_secret, code):
                 next_url = flask_session.get("pending_2fa_next") or url_for("dashboard")
                 _finish_login(user)
+                remembered = bool(request.form.get("remember_device"))
+                _audit(db, "login", detail="con 2FA" + (" + equipo recordado" if remembered else ""))
                 resp = redirect(next_url)
-                if request.form.get("remember_device"):
+                if remembered:
                     raw_token, token_hash = new_trusted_device_token()
                     db.add(TrustedDevice(
                         user_id=user.id, token_hash=token_hash,
@@ -148,6 +185,7 @@ def verify_2fa():
                         httponly=True, samesite="Lax",
                     )
                 return resp
+            _audit(db, "login_2fa_failed", username=user.username)
             flash("Código incorrecto. Verifica la hora de tu teléfono y vuelve a intentar.")
         return render_template("verify_2fa.html", username=user.username)
     finally:
@@ -156,6 +194,12 @@ def verify_2fa():
 
 @app.route("/logout")
 def logout():
+    if "user_id" in flask_session:
+        db = SessionLocal()
+        try:
+            _audit(db, "logout")
+        finally:
+            db.close()
     flask_session.clear()
     return redirect(url_for("login"))
 
@@ -489,6 +533,11 @@ def sync_now():
     been polled (can take a minute or two with a lot of history)."""
     results = sync_all()
     summary = "; ".join(f"{name}: {result}" for name, result in results.items())
+    db = SessionLocal()
+    try:
+        _audit(db, "sync_all", detail=summary)
+    finally:
+        db.close()
     flash(f"Sincronización completa. {summary}")
     return redirect(url_for("devices_status"))
 
@@ -504,9 +553,11 @@ def device_sync_one(device_pk):
         device = db.get(Device, device_pk) or abort_404()
         try:
             count = sync_device(db, device)
+            _audit(db, "device_sync", target=device.name, detail=f"{count} registro(s) nuevo(s)")
             flash(f"'{device.name}' sincronizado: {count} registro(s) nuevo(s).")
         except Exception as e:
             db.rollback()
+            _audit(db, "device_sync", target=device.name, detail=f"ERROR: {e}")
             flash(f"Error sincronizando '{device.name}': {e}")
         return redirect(url_for("devices_status"))
     finally:
@@ -533,6 +584,7 @@ def device_new():
             )
             db.add(device)
             db.commit()
+            _audit(db, "device_add", target=device.name, detail=f"{ip}:{port}")
             flash(f"Dispositivo '{device.name}' agregado. Usa 'Probar conexión' para confirmarlo.")
             return redirect(url_for("devices_status"))
         finally:
@@ -557,6 +609,7 @@ def device_edit(device_pk):
             device.terminal_no = int(terminal_no) if terminal_no.isdigit() else None
             device.active = 1 if request.form.get("active") else 0
             db.commit()
+            _audit(db, "device_edit", target=device.name)
             flash(f"Dispositivo '{device.name}' actualizado.")
             return redirect(url_for("devices_status"))
         history_count = db.query(AttendanceLog).filter(AttendanceLog.device_pk == device.id).count()
@@ -580,10 +633,12 @@ def device_delete(device_pk):
                 "también, entra a Editar y usa 'Eliminar (borra también el historial)'."
             )
             return redirect(url_for("devices_status"))
+        device_name = device.name
         db.query(EmployeeMap).filter(EmployeeMap.device_pk == device.id).delete()
         db.query(AttendanceLog).filter(AttendanceLog.device_pk == device.id).delete()
         db.delete(device)
         db.commit()
+        _audit(db, "device_delete", target=device_name, detail=f"{history_count} marcación(es) borrada(s)")
         flash(f"Dispositivo '{device.name}' eliminado.")
         return redirect(url_for("devices_status"))
     finally:
@@ -599,6 +654,7 @@ def device_test(device_pk):
 
         reachable, detail = check_network_reachable(device.ip, device.port)
         if not reachable:
+            _audit(db, "device_test", target=device.name, detail=f"ERROR (red): {detail}")
             flash(f"'{device.name}' ({device.ip}:{device.port}) no responde en la red: {detail}")
             return redirect(url_for("devices_status"))
 
@@ -606,6 +662,7 @@ def device_test(device_pk):
         system.connect()
         if not system.conn:
             hint = " Revisa la llave de comunicación (comm key) configurada en el equipo." if device.comm_password == 0 else " Revisa que la llave de comunicación configurada aquí coincida con la del equipo."
+            _audit(db, "device_test", target=device.name, detail="ERROR (protocolo ZK rechazado)")
             flash(f"'{device.name}' responde en la red pero rechazó la conexión del protocolo ZK.{hint}")
             return redirect(url_for("devices_status"))
         try:
@@ -617,6 +674,7 @@ def device_test(device_pk):
                 if not clash:
                     device.device_id = serial
             db.commit()
+            _audit(db, "device_test", target=device.name, detail=f"OK - modelo {model or '?'}, serial {serial or '?'}")
             flash(f"Conexión OK con '{device.name}': modelo {model or '?'}, serial {serial or '?'}.")
         finally:
             system.disconnect()
@@ -635,6 +693,7 @@ def device_ping(device_pk):
     try:
         device = db.get(Device, device_pk) or abort_404()
         reachable, detail = check_network_reachable(device.ip, device.port)
+        _audit(db, "device_ping", target=device.name, detail="OK" if reachable else f"ERROR: {detail}")
         if reachable:
             flash(f"Ping OK: '{device.name}' ({device.ip}:{device.port}) responde en la red.")
         else:
@@ -657,8 +716,10 @@ def device_restart(device_pk):
             return redirect(url_for("devices_status"))
         try:
             system.restart_device()
+            _audit(db, "device_restart", target=device.name)
             flash(f"Se envió el reinicio a '{device.name}'. Tardará unos segundos en volver a estar disponible.")
         except Exception as e:
+            _audit(db, "device_restart", target=device.name, detail=f"ERROR: {e}")
             flash(f"Error al reiniciar '{device.name}': {e}")
         return redirect(url_for("devices_status"))
     finally:
@@ -678,8 +739,10 @@ def device_poweroff(device_pk):
             return redirect(url_for("devices_status"))
         try:
             system.poweroff_device()
+            _audit(db, "device_poweroff", target=device.name)
             flash(f"Se envió el apagado a '{device.name}'. A diferencia de reiniciar, no volverá a encender solo.")
         except Exception as e:
+            _audit(db, "device_poweroff", target=device.name, detail=f"ERROR: {e}")
             flash(f"Error al apagar '{device.name}': {e}")
         return redirect(url_for("devices_status"))
     finally:
@@ -769,6 +832,8 @@ def device_user_new(device_pk):
                     db.add(EmployeeMap(device_pk=device.id, device_user_id=user_id, employee_id=int(employee_id)))
                 db.commit()
 
+            _audit(db, "device_user_add" if created else "device_user_edit",
+                   target=f"{device.name}: {user_id}", detail=name)
             flash(f"Usuario '{name}' {'creado' if created else 'actualizado'} en '{device.name}'.")
             return redirect(url_for("device_users", device_pk=device.id))
         return render_template("device_user_form.html", device=device, employees=employees)
@@ -822,6 +887,7 @@ def device_user_edit(device_pk, user_id):
                 db.delete(current_map)
                 db.commit()
 
+            _audit(db, "device_user_edit", target=f"{device.name}: {user_id}", detail=name)
             flash(f"Usuario '{name}' actualizado en '{device.name}' y en la base central.")
             return redirect(url_for("device_users", device_pk=device.id))
 
@@ -860,8 +926,10 @@ def device_user_delete(device_pk, user_id):
             return redirect(url_for("device_users", device_pk=device.id))
         try:
             system.delete_device_user(user_id)
+            _audit(db, "device_user_delete", target=f"{device.name}: {user_id}")
             flash(f"Usuario {user_id} eliminado de '{device.name}' (su historial de marcaciones se conserva).")
         except Exception as e:
+            _audit(db, "device_user_delete", target=f"{device.name}: {user_id}", detail=f"ERROR: {e}")
             flash(f"Error eliminando en el dispositivo: {e}")
         finally:
             system.disconnect()
@@ -889,12 +957,14 @@ def employee_new():
     if request.method == "POST":
         db = SessionLocal()
         try:
+            full_name = request.form["full_name"].strip()
             db.add(Employee(
                 code=request.form.get("code", "").strip() or None,
-                full_name=request.form["full_name"].strip(),
+                full_name=full_name,
                 active=True,
             ))
             db.commit()
+            _audit(db, "employee_add", target=full_name)
             flash("Empleado agregado al maestro.")
             return redirect(url_for("employees_list"))
         finally:
@@ -949,6 +1019,7 @@ def employees_import():
                     db.add(Employee(code=code, full_name=full_name, active=True))
                     created += 1
             db.commit()
+            _audit(db, "employee_import", detail=f"{created} creado(s), {updated} actualizado(s), {skipped} omitida(s)")
             flash(f"Importación completa: {created} creado(s), {updated} actualizado(s), {skipped} fila(s) sin nombre omitida(s).")
             return redirect(url_for("employees_list"))
         finally:
@@ -988,8 +1059,10 @@ def employee_edit(employee_id):
                         results.append(f"{device.name}: error ({e})")
                     finally:
                         system.disconnect()
+                _audit(db, "employee_edit", target=new_name, detail="propagado a relojes: " + "; ".join(results))
                 flash("Empleado actualizado. Relojes: " + (", ".join(results) if results else "no tenía dispositivos vinculados") + ".")
             else:
+                _audit(db, "employee_edit", target=new_name)
                 flash("Empleado actualizado (solo en la base central).")
             return redirect(url_for("employees_list"))
         return render_template("employee_form.html", employee=employee)
@@ -1052,6 +1125,7 @@ def employee_map_create():
         else:
             db.add(EmployeeMap(device_pk=device_pk, device_user_id=device_user_id, employee_id=int(employee_id)))
         db.commit()
+        _audit(db, "employee_link", target=f"device {device_pk}: {device_user_id}", detail=f"employee_id={employee_id}")
         flash("Vinculado correctamente.")
         return redirect(url_for("employees_unmapped"))
     finally:
@@ -1082,13 +1156,15 @@ def user_new():
             if db.query(User).filter(User.username == username).first():
                 flash("Ese usuario ya existe.")
                 return redirect(url_for("user_new"))
+            role = request.form.get("role", "viewer")
             db.add(User(
                 username=username,
                 password_hash=hash_password(request.form["password"]),
-                role=request.form.get("role", "viewer"),
+                role=role,
                 active=True,
             ))
             db.commit()
+            _audit(db, "account_add", target=username, detail=f"rol: {role}")
             flash(f"Cuenta '{username}' creada.")
             return redirect(url_for("users_list"))
         finally:
@@ -1107,6 +1183,7 @@ def user_toggle(user_pk):
         else:
             user.active = not user.active
             db.commit()
+            _audit(db, "account_toggle", target=user.username, detail="activo" if user.active else "desactivado")
         return redirect(url_for("users_list"))
     finally:
         db.close()
@@ -1125,6 +1202,7 @@ def user_reset_2fa(user_pk):
         user.totp_secret = None
         db.query(TrustedDevice).filter(TrustedDevice.user_id == user.id).delete()
         db.commit()
+        _audit(db, "account_reset_2fa", target=user.username)
         flash(f"2FA desactivado para '{user.username}'. Puede iniciar sesión solo con su contraseña.")
         return redirect(url_for("users_list"))
     finally:
@@ -1140,7 +1218,15 @@ def account_security():
     try:
         user = db.get(User, flask_session["user_id"])
         trusted = db.query(TrustedDevice).filter(TrustedDevice.user_id == user.id).order_by(TrustedDevice.created_at.desc()).all()
-        return render_template("account_security.html", user=user, trusted=trusted)
+        recent_logins = (
+            db.query(AuditLog)
+            .filter(AuditLog.username == user.username, AuditLog.action.in_(["login", "login_failed", "login_2fa_failed"]))
+            .order_by(AuditLog.timestamp.desc()).limit(10).all()
+        )
+        return render_template(
+            "account_security.html", user=user, trusted=trusted, recent_logins=recent_logins,
+            session_ip=flask_session.get("client_ip"), session_hostname=flask_session.get("client_hostname"),
+        )
     finally:
         db.close()
 
@@ -1164,6 +1250,7 @@ def setup_2fa():
             user.totp_enabled = True
             db.commit()
             flask_session.pop("pending_totp_secret", None)
+            _audit(db, "2fa_setup", target=user.username)
             flash("2FA activado. La próxima vez que inicies sesión (desde un equipo nuevo) te pedirá el código.")
             return redirect(url_for("account_security"))
 
@@ -1188,6 +1275,7 @@ def disable_2fa():
         user.totp_secret = None
         db.query(TrustedDevice).filter(TrustedDevice.user_id == user.id).delete()
         db.commit()
+        _audit(db, "2fa_disable", target=user.username)
         flash("2FA desactivado en tu cuenta.")
         return redirect(url_for("account_security"))
     finally:
@@ -1236,6 +1324,7 @@ def backup_export():
     try:
         data = export_data(db)
         filename = f"asistencia_backup_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        _audit(db, "backup_export", target=filename)
         return Response(
             json.dumps(data, ensure_ascii=False, indent=2),
             mimetype="application/json",
@@ -1265,6 +1354,7 @@ def backup_import():
     try:
         counts = import_data(db, data)
         db.commit()
+        _audit(db, "backup_import", target=file.filename, detail=", ".join(f"{k}: {v}" for k, v in counts.items()))
         flash(
             "Backup restaurado. "
             + ", ".join(f"{k}: {v}" for k, v in counts.items())
@@ -1275,6 +1365,68 @@ def backup_import():
         db.rollback()
         flash(f"Error restaurando el backup (no se aplicó ningún cambio): {e}")
         return redirect(url_for("backup_page"))
+    finally:
+        db.close()
+
+
+# ------------------------------------------------------------ audit log ---
+
+@app.route("/audit")
+@super_admin_required
+def audit_log():
+    db = SessionLocal()
+    try:
+        query = db.query(AuditLog)
+        action_filter = request.args.get("action", "").strip()
+        username_filter = request.args.get("username", "").strip()
+        date_from = request.args.get("from", "").strip()
+        date_to = request.args.get("to", "").strip()
+
+        if action_filter:
+            query = query.filter(AuditLog.action == action_filter)
+        if username_filter:
+            query = query.filter(AuditLog.username == username_filter)
+        if date_from:
+            query = query.filter(AuditLog.timestamp >= datetime.strptime(date_from, "%Y-%m-%d"))
+        if date_to:
+            query = query.filter(AuditLog.timestamp < datetime.strptime(date_to, "%Y-%m-%d") + timedelta(days=1))
+
+        page = max(1, request.args.get("page", 1, type=int))
+        total = query.count()
+        rows = (
+            query.order_by(AuditLog.timestamp.desc())
+            .offset((page - 1) * PAGE_SIZE).limit(PAGE_SIZE).all()
+        )
+        actions = [a for (a,) in db.query(AuditLog.action).distinct().order_by(AuditLog.action).all()]
+        usernames = [u for (u,) in db.query(AuditLog.username).distinct().filter(AuditLog.username.isnot(None)).order_by(AuditLog.username).all()]
+        return render_template(
+            "audit.html", rows=rows, total=total, page=page, page_size=PAGE_SIZE,
+            actions=actions, usernames=usernames,
+            filters={"action": action_filter, "username": username_filter, "from": date_from, "to": date_to},
+        )
+    finally:
+        db.close()
+
+
+@app.route("/audit/export.csv")
+@super_admin_required
+def audit_export_csv():
+    db = SessionLocal()
+    try:
+        rows = db.query(AuditLog).order_by(AuditLog.timestamp.desc()).all()
+        buf = io.StringIO()
+        writer = csv.writer(buf)
+        writer.writerow(["Fecha/Hora (UTC)", "Usuario", "Acción", "Objetivo", "Detalle", "IP", "Equipo (PC)", "Navegador"])
+        for r in rows:
+            writer.writerow([
+                r.timestamp.strftime("%Y-%m-%d %H:%M:%S"), r.username or "", r.action,
+                r.target or "", r.detail or "", r.ip_address or "", r.hostname or "", r.user_agent or "",
+            ])
+        filename = f"auditoria_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv"
+        return Response(
+            buf.getvalue(), mimetype="text/csv",
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
+        )
     finally:
         db.close()
 
