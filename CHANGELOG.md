@@ -13,12 +13,15 @@ para el procedimiento completo de release.
 
 ### Agregado
 - Pantalla **Permisos** (solo super admin): elige, por módulo, si "Solo
-  lectura" y "Administrador" pueden abrir Marcaciones/Dispositivos/
-  Empleados/Sin vincular -- por defecto queda igual que antes de esta
-  función (nada cambia hasta que alguien lo toque). Nunca le da a "Solo
-  lectura" permisos de escritura (eso lo sigue controlando cada
-  pantalla), ni a "Administrador" las pantallas de Super administrador
-  (Cuentas, Backup, Auditoría, Permisos), que siguen fijas.
+  lectura" y "Administrador" pueden abrir Marcaciones, Exportar
+  marcaciones, Dispositivos, Usuarios del dispositivo, Empleados y Sin
+  vincular -- por defecto queda igual que antes de esta función (nada
+  cambia hasta que alguien lo toque). "Exportar marcaciones" es aparte
+  de "Marcaciones" (se puede dejar ver la pantalla sin poder exportar).
+  Nunca le da a "Solo lectura" permisos de escritura (eso lo sigue
+  controlando cada pantalla), ni a "Administrador" las pantallas de
+  Super administrador (Cuentas, Backup, Auditoría, Permisos), que
+  siguen fijas.
 - Cualquier usuario puede cambiar su propia contraseña desde
   Seguridad, pidiendo la actual -- antes solo un super admin podía
   resetearla (sin pedir la anterior, para el caso de olvido).

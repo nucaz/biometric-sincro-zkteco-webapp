@@ -19,7 +19,9 @@ ROLE_LABELS = {"super_admin": "Super administrador", "admin": "Administrador", "
 # a checkbox).
 MODULES = {
     "dashboard": "Marcaciones",
+    "export": "Exportar marcaciones",
     "devices": "Dispositivos",
+    "device_users": "Usuarios del dispositivo",
     "employees": "Empleados",
     "employees_unmapped": "Sin vincular",
 }
@@ -32,7 +34,9 @@ CONFIGURABLE_ROLES = ("viewer", "admin")
 # /permissions departs from this.
 DEFAULT_MODULE_ACCESS = {
     "dashboard": {"viewer": True, "admin": True},
+    "export": {"viewer": True, "admin": True},
     "devices": {"viewer": True, "admin": True},
+    "device_users": {"viewer": False, "admin": True},
     "employees": {"viewer": False, "admin": True},
     "employees_unmapped": {"viewer": False, "admin": True},
 }

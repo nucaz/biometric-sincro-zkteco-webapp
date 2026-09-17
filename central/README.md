@@ -73,15 +73,18 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     nunca por IP/equipo, así que otra cuenta desde la misma máquina
     sigue funcionando normal).
   - **Permisos** (solo super admin): matriz de casillas por rol
-    (`viewer`/`admin`) x módulo (Marcaciones/Dispositivos/Empleados/Sin
-    vincular) para abrir o cerrar cada uno. Solo controla si el rol
-    puede ENTRAR al módulo -- dentro de cada pantalla, qué se puede
-    editar lo sigue decidiendo el rol como siempre (un `viewer` con
-    Empleados habilitado lo ve de solo lectura, nunca con los botones
-    de agregar/editar). Cuentas, Backup, Auditoría y Permisos mismos no
-    están en esta lista -- siguen exclusivos de super admin, sin
-    excepción. Sin configurar nada, el comportamiento es idéntico al de
-    antes de que existiera esta pantalla.
+    (`viewer`/`admin`) x módulo (Marcaciones, Exportar marcaciones,
+    Dispositivos, Usuarios del dispositivo, Empleados, Sin vincular)
+    para abrir o cerrar cada uno. "Exportar marcaciones" es un módulo
+    aparte de "Marcaciones" -- se puede dejar ver la tabla sin poder
+    descargarla. Solo controla si el rol puede ENTRAR al módulo --
+    dentro de cada pantalla, qué se puede editar lo sigue decidiendo el
+    rol como siempre (un `viewer` con Empleados o Usuarios del
+    dispositivo habilitado los ve de solo lectura, nunca con los
+    botones de agregar/editar/eliminar). Cuentas, Backup, Auditoría y
+    Permisos mismos no están en esta lista -- siguen exclusivos de
+    super admin, sin excepción. Sin configurar nada, el comportamiento
+    es idéntico al de antes de que existiera esta pantalla.
   - **Backup**: solo para super administradores.
 
 ### Roles

@@ -3,7 +3,7 @@
 {% block content %}
 <div class="toolbar">
   <h2 style="margin:0;">Usuarios enrolados en {{ device.name }} ({{ device.ip }})</h2>
-  <a class="btn" href="{{ url_for('device_user_new', device_pk=device.id) }}">+ Agregar usuario</a>
+  {% if can_manage %}<a class="btn" href="{{ url_for('device_user_new', device_pk=device.id) }}">+ Agregar usuario</a>{% endif %}
 </div>
 <p class="muted">Esta lista se lee en vivo del dispositivo (no de la base central). Crear/editar/eliminar aquí escribe directamente en el reloj físico.</p>
 
@@ -24,11 +24,15 @@
       <td title="PIN para el menú físico del equipo / respaldo por USB -- ver/cambiar en Editar">{{ 'Sí' if u.password else '—' }}</td>
       <td>{{ u.employee.full_name if u.employee else '—' }}{% if u.employee and u.employee.code %} ({{ u.employee.code }}){% endif %}</td>
       <td class="btn-group">
+        {% if can_manage %}
         <a class="btn secondary" href="{{ url_for('device_user_edit', device_pk=device.id, user_id=u.user_id) }}">Editar</a>
         <form class="inline-form" method="post" action="{{ url_for('device_user_delete', device_pk=device.id, user_id=u.user_id) }}"
               onsubmit="return confirm('¿Eliminar a {{ u.name }} (ID {{ u.user_id }}) del dispositivo {{ device.name }}? Esto borra su huella/tarjeta del equipo. Su historial de marcaciones NO se borra.');">
           <button type="submit" class="btn danger">Eliminar del dispositivo</button>
         </form>
+        {% else %}
+        <span class="muted">—</span>
+        {% endif %}
       </td>
     </tr>
     {% else %}

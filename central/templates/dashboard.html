@@ -29,9 +29,11 @@
     <input type="text" name="q" value="{{ args.get('q', '') }}">
   </label>
   <button type="submit">Filtrar</button>
+  {% if module_enabled('export') %}
   <a class="btn" href="{{ url_for('export_csv', **args) }}">Exportar CSV</a>
   <a class="btn" href="{{ url_for('export_xlsx', **args) }}">Exportar Excel</a>
   <a class="btn" href="{{ url_for('export_pdf', **args) }}">Exportar PDF</a>
+  {% endif %}
 </form>
 
 <div class="toolbar">

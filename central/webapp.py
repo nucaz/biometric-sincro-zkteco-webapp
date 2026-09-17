@@ -482,7 +482,7 @@ def _export_subtitle(args):
 
 
 @app.route("/export.csv")
-@module_required("dashboard")
+@module_required("export")
 def export_csv():
     db = SessionLocal()
     try:
@@ -500,7 +500,7 @@ def export_csv():
 
 
 @app.route("/export.xlsx")
-@module_required("dashboard")
+@module_required("export")
 def export_xlsx():
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -616,7 +616,7 @@ class _ReportPDF:
 
 
 @app.route("/export.pdf")
-@module_required("dashboard")
+@module_required("export")
 def export_pdf():
     db = SessionLocal()
     try:
@@ -1097,7 +1097,7 @@ PRIVILEGE_LABELS = {
 
 
 @app.route("/devices/<int:device_pk>/users")
-@admin_required
+@module_required("device_users")
 def device_users(device_pk):
     db = SessionLocal()
     try:

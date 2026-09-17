@@ -30,11 +30,13 @@
       <dt>Estado</dt><dd>{{ d.last_sync_status or '-' }}</dd>
     </dl>
 
-    {% if can_manage %}
+    {% if can_manage or module_enabled('device_users') %}
     <div class="btn-group">
-      <a class="btn secondary" href="{{ url_for('device_edit', device_pk=d.id) }}">Editar</a>
-      <a class="btn secondary" href="{{ url_for('device_users', device_pk=d.id) }}">Usuarios</a>
+      {% if can_manage %}<a class="btn secondary" href="{{ url_for('device_edit', device_pk=d.id) }}">Editar</a>{% endif %}
+      {% if module_enabled('device_users') %}<a class="btn secondary" href="{{ url_for('device_users', device_pk=d.id) }}">Usuarios</a>{% endif %}
     </div>
+    {% endif %}
+    {% if can_manage %}
     <div class="btn-group">
       <form method="post" action="{{ url_for('device_test', device_pk=d.id) }}"><button type="submit">Probar conexión</button></form>
       <form method="post" action="{{ url_for('device_ping', device_pk=d.id) }}"><button type="submit" class="secondary" style="background:#0891b2;">Ping</button></form>
