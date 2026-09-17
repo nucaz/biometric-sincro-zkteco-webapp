@@ -12,6 +12,15 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- Botón "Resetear contraseña" en Cuentas (solo super admin): fija una
+  contraseña nueva para cualquier usuario del panel sin necesitar la
+  anterior.
+- Desactivar un empleado en el maestro central (con "Propagar a los
+  relojes" marcado) ahora también elimina su huella/tarjeta de cada
+  reloj donde está vinculado -- revoca su acceso físico real, no solo
+  el registro en la base central. Su historial de marcaciones nunca se
+  toca (ni el borrado en el reloj ni la desactivación en la base lo
+  afectan).
 - Log de auditoría (`/audit`, solo super admin): conexiones (login, 2FA,
   ping/probar conexión) y cambios (dispositivos, empleados, cuentas,
   backup, sincronización), con IP y nombre de PC (mejor esfuerzo, por DNS

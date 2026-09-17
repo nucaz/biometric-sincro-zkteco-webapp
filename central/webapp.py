@@ -1395,14 +1395,16 @@ def employee_edit(employee_id):
         if request.method == "POST":
             new_name = request.form["full_name"].strip()
             name_changed = new_name != employee.full_name
+            was_active = employee.active
             push_to_devices = bool(request.form.get("push_to_devices"))
 
             employee.code = request.form.get("code", "").strip() or None
             employee.full_name = new_name
             employee.active = bool(request.form.get("active"))
             db.commit()
+            became_inactive = was_active and not employee.active
 
-            if name_changed and push_to_devices:
+            if push_to_devices and (name_changed or became_inactive):
                 results = []
                 targets = []
                 for link in db.query(EmployeeMap).filter(EmployeeMap.employee_id == employee.id).all():
@@ -1410,18 +1412,37 @@ def employee_edit(employee_id):
                     targets.append((device.id, device.name, device.ip, device.port, device.comm_password, link.device_user_id))
 
                 for target_device_pk, device_name, device_ip, device_port, comm_password, device_user_id in targets:
-                    def work():
-                        system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
-                        system.connect()
-                        if not system.conn:
-                            raise RuntimeError(system.last_connect_error or "no se pudo conectar")
-                        try:
-                            system.create_or_update_user(user_id=device_user_id, name=new_name)
-                        finally:
-                            system.disconnect()
+                    if became_inactive:
+                        # Deactivating an employee revokes their physical
+                        # access -- delete their enrollment (fingerprint/card)
+                        # from the device, same as the "Eliminar" button on
+                        # device_users. Their attendance history is untouched
+                        # either way (never lives on the device, and
+                        # delete_device_user never touches attendance_log).
+                        def work():
+                            system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
+                            system.connect()
+                            if not system.conn:
+                                raise RuntimeError(system.last_connect_error or "no se pudo conectar")
+                            try:
+                                system.delete_device_user(device_user_id)
+                            finally:
+                                system.disconnect()
+                        action_label = "eliminado del equipo (desactivado)"
+                    else:
+                        def work():
+                            system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
+                            system.connect()
+                            if not system.conn:
+                                raise RuntimeError(system.last_connect_error or "no se pudo conectar")
+                            try:
+                                system.create_or_update_user(user_id=device_user_id, name=new_name)
+                            finally:
+                                system.disconnect()
+                        action_label = "actualizado"
                     try:
                         run_device_op(target_device_pk, device_name, work)
-                        results.append(f"{device_name}: actualizado")
+                        results.append(f"{device_name}: {action_label}")
                     except Exception as e:
                         results.append(f"{device_name}: error ({e})")
                 _audit(db, "employee_edit", target=new_name, detail="propagado a relojes: " + "; ".join(results))
@@ -1570,6 +1591,27 @@ def user_reset_2fa(user_pk):
         _audit(db, "account_reset_2fa", target=user.username)
         flash(f"2FA desactivado para '{user.username}'. Puede iniciar sesión solo con su contraseña.")
         return redirect(url_for("users_list"))
+    finally:
+        db.close()
+
+
+@app.route("/users/<int:user_pk>/reset_password", methods=["GET", "POST"])
+@super_admin_required
+def user_reset_password(user_pk):
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_pk) or abort_404()
+        if request.method == "POST":
+            new_password = request.form.get("password", "")
+            if len(new_password) < 6:
+                flash("La contraseña debe tener al menos 6 caracteres.")
+                return redirect(url_for("user_reset_password", user_pk=user.id))
+            user.password_hash = hash_password(new_password)
+            db.commit()
+            _audit(db, "account_reset_password", target=user.username)
+            flash(f"Contraseña de '{user.username}' actualizada. Avísale la nueva contraseña por un medio seguro.")
+            return redirect(url_for("users_list"))
+        return render_template("user_reset_password.html", user=user)
     finally:
         db.close()
 

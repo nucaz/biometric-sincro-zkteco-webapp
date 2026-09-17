@@ -54,8 +54,18 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     también puede empujar el nombre nuevo a todos los relojes donde esté
     vinculado.
   - **Empleados**: maestro central, y pantalla "Sin vincular" para
-    asignarle nombre real a los `NN-xxxxx`.
-  - **Cuentas** y **Backup**: solo para super administradores.
+    asignarle nombre real a los `NN-xxxxx`. Al editar uno con "Propagar
+    a los relojes" marcado: si cambia el nombre, lo actualiza en cada
+    reloj donde está vinculado; si se desactiva, elimina su huella/
+    tarjeta de esos mismos relojes (revoca el acceso físico real) --
+    en ambos casos su historial de marcaciones en la base central
+    nunca se toca.
+  - **Cuentas** (solo super admin): alta/baja, Resetear contraseña (fija
+    una nueva sin necesitar la anterior), Resetear 2FA y Desbloquear
+    (tras 3 intentos fallidos de inicio de sesión -- el bloqueo es por
+    cuenta, nunca por IP/equipo, así que otra cuenta desde la misma
+    máquina sigue funcionando normal).
+  - **Backup**: solo para super administradores.
 
 ### Roles
 

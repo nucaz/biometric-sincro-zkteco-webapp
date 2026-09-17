@@ -14,7 +14,7 @@
     <input type="checkbox" name="active" {{ 'checked' if employee.active }} style="width:auto;"> Activo
   </label>
   <label style="flex-direction: row; align-items: center; gap: 8px;">
-    <input type="checkbox" name="push_to_devices" checked style="width:auto;"> Si cambio el nombre, actualizarlo también en los relojes donde está vinculado
+    <input type="checkbox" name="push_to_devices" checked style="width:auto;"> Propagar a los relojes donde está vinculado: si cambio el nombre lo actualiza, y si lo desactivo elimina su huella/tarjeta del equipo (su historial de marcaciones nunca se toca)
   </label>
   {% endif %}
   <button type="submit">Guardar</button>
