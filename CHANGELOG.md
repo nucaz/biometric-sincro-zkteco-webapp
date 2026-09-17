@@ -90,6 +90,16 @@ para el procedimiento completo de release.
   puerto TCP por su cuenta. De paso, el motivo real de una conexión
   fallida (antes descartado y solo impreso en la consola del servidor)
   ahora se guarda y se muestra en el mensaje de error / auditoría.
+- El candado por dispositivo (arriba) solo protegía dentro de un mismo
+  proceso -- una sincronización manual desde el panel y la tarea
+  programada (`python -m central.sync`, un proceso aparte de Windows
+  Task Scheduler) seguían pudiendo chocar contra el mismo equipo al
+  mismo tiempo, cada una sin saber de la otra. Ahora el candado vive en
+  la base de datos compartida (tabla `device_locks`), así que cubre
+  también ese caso: si la tarea programada ya está sincronizando un
+  equipo, un clic manual sobre el mismo equipo se avisa al instante en
+  vez de sumarse a la contienda -- verificado simulando ambos procesos
+  a la vez contra un dispositivo real.
 
 ## [1.0.0] - 2026-09-15
 

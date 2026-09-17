@@ -12,9 +12,10 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from attendance_system import ZKTecoAttendance, device_lock  # noqa: E402
+from attendance_system import ZKTecoAttendance  # noqa: E402
 from central.db import SessionLocal, init_db  # noqa: E402
 from central.models import Device, AttendanceLog, utcnow  # noqa: E402
+from central import device_lock  # noqa: E402
 
 # Pulling the full attendance log is a much bigger transfer than a quick
 # "probar conexion" handshake -- some devices (flaky link, VPN between
@@ -38,13 +39,7 @@ def _pull_raw_with_retry(device: Device, progress=None):
     the raw DataFrame (or None if the device genuinely has zero records
     right now) -- does NOT touch the central DB."""
     progress = progress or _noop
-    lock = device_lock((device.ip, device.port))
-    if not lock.acquire(blocking=False):
-        raise RuntimeError(
-            f"'{device.name}' ya tiene otra operación en curso (otra sincronización, "
-            "una prueba de conexión, etc.) -- se omite esta vuelta en vez de sumar "
-            "una segunda conexión al mismo equipo."
-        )
+    device_lock.acquire(device.id, device.name, owner="central.sync")
     try:
         raw = None
         last_error = None
@@ -79,7 +74,7 @@ def _pull_raw_with_retry(device: Device, progress=None):
             raise RuntimeError(last_error)
         return raw
     finally:
-        lock.release()
+        device_lock.release(device.id)
 
 
 def _insert_new_rows(session, device: Device, raw, progress=None) -> int:

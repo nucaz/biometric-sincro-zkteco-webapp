@@ -27,9 +27,10 @@ from flask import (
 from zk import const as zk_const
 from sqlalchemy import func
 
-from attendance_system import ZKTecoAttendance, check_network_reachable, device_lock
+from attendance_system import ZKTecoAttendance, check_network_reachable
 from central.db import SessionLocal, init_db
 from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog
+from central import device_lock
 from central.auth import login_required, admin_required, super_admin_required, verify_password, hash_password, ROLE_LABELS
 from central.sync import sync_all, sync_device, backup_device
 from central.backup import export_data, import_data
@@ -154,30 +155,25 @@ def run_with_hard_timeout(fn, *args, **kwargs):
         )
 
 
-def run_device_op(device_ip, device_port, device_name, fn, *args, **kwargs):
+def run_device_op(device_pk, device_name, fn, *args, **kwargs):
     """Like run_with_hard_timeout, but for an action that opens a
     connection to one specific physical device (Probar conexión,
     Reiniciar, Apagar, Vaciar, Usuarios). Refuses to start a second one
     while a previous attempt on the SAME device is still in flight --
     including one still leaking in the background past its own hard
     timeout, see _sync_executor above -- since a ZK terminal only accepts
-    one live session at a time. Uses the same lock registry as central.sync, so
-    this also won't collide with a "Sincronizar"/"Descargar respaldo" that's
-    mid-flight for this device (within this process -- a scheduled
-    `python -m central.sync` run is a separate process and isn't covered)."""
-    lock = device_lock((device_ip, device_port))
-    if not lock.acquire(blocking=False):
-        raise RuntimeError(
-            f"'{device_name}' ya tiene otra operación en curso (sincronización, prueba "
-            "de conexión, etc.). Espera a que termine antes de intentar de nuevo -- "
-            "el equipo solo acepta una conexión a la vez."
-        )
+    one live session at a time. Uses the same DB-backed lock as
+    central.sync (see central/device_lock.py), so this also won't collide
+    with a "Sincronizar"/"Descargar respaldo" mid-flight for this device --
+    including one running as a separate scheduled `python -m central.sync`
+    process, not just another request in this same web app."""
+    device_lock.acquire(device_pk, device_name, owner="webapp")
 
     def guarded():
         try:
             return fn(*args, **kwargs)
         finally:
-            lock.release()
+            device_lock.release(device_pk)
 
     future = _sync_executor.submit(guarded)
     try:
@@ -911,7 +907,7 @@ def device_test(device_pk):
     db = SessionLocal()
     try:
         try:
-            result = run_device_op(device_ip, device_port, device_name, work)
+            result = run_device_op(device_pk, device_name, work)
         except Exception as e:
             _audit(db, "device_test", target=device_name, detail=f"ERROR: {e}")
             flash(f"'{device_name}': {e}")
@@ -981,7 +977,7 @@ def device_restart(device_pk):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_ip, device_port, device_name, work)
+            run_device_op(device_pk, device_name, work)
             _audit(db, "device_restart", target=device_name)
             flash(f"Se envió el reinicio a '{device_name}'. Tardará unos segundos en volver a estar disponible.")
         except Exception as e:
@@ -1015,7 +1011,7 @@ def device_poweroff(device_pk):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_ip, device_port, device_name, work)
+            run_device_op(device_pk, device_name, work)
             _audit(db, "device_poweroff", target=device_name)
             flash(f"Se envió el apagado a '{device_name}'. A diferencia de reiniciar, no volverá a encender solo.")
         except Exception as e:
@@ -1057,7 +1053,7 @@ def device_clear_attendance(device_pk):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_ip, device_port, device_name, work)
+            run_device_op(device_pk, device_name, work)
             _audit(db, "device_clear_attendance", target=device_name,
                    detail="marcaciones borradas del equipo (el historial central se conserva)")
             flash(f"'{device_name}' vaciado: sus marcaciones se borraron del equipo. El historial ya sincronizado en el panel se conserva intacto.")
@@ -1108,7 +1104,7 @@ def device_users(device_pk):
             system.disconnect()
 
     try:
-        users = run_device_op(device_ip, device_port, device_name, work)
+        users = run_device_op(device_pk, device_name, work)
     except TimeoutError as e:
         flash(f"'{device_name}': {e}")
         return redirect(url_for("devices_status"))
@@ -1159,7 +1155,7 @@ def device_user_new(device_pk):
                     system.disconnect()
 
             try:
-                created = run_device_op(device_ip, device_port, device_name, work)
+                created = run_device_op(device_pk, device_name, work)
             except Exception as e:
                 flash(f"Error escribiendo en el dispositivo: {e}")
                 return redirect(url_for("device_users", device_pk=device.id))
@@ -1218,7 +1214,7 @@ def device_user_edit(device_pk, user_id):
                     system.disconnect()
 
             try:
-                run_device_op(device_ip, device_port, device_name, work)
+                run_device_op(device_pk, device_name, work)
             except Exception as e:
                 flash(f"Error escribiendo en el dispositivo: {e}")
                 return redirect(url_for("device_users", device_pk=device.id))
@@ -1251,7 +1247,7 @@ def device_user_edit(device_pk, user_id):
                 system.disconnect()
 
         try:
-            live_user = run_device_op(device_ip, device_port, device_name, work)
+            live_user = run_device_op(device_pk, device_name, work)
         except Exception as e:
             flash(f"No se pudo conectar a '{device_name}' para leer los datos del usuario: {e}")
             return redirect(url_for("device_users", device_pk=device.id))
@@ -1290,7 +1286,7 @@ def device_user_delete(device_pk, user_id):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_ip, device_port, device_name, work)
+            run_device_op(device_pk, device_name, work)
             _audit(db, "device_user_delete", target=f"{device_name}: {user_id}")
             flash(f"Usuario {user_id} eliminado de '{device_name}' (su historial de marcaciones se conserva).")
         except Exception as e:
@@ -1411,9 +1407,9 @@ def employee_edit(employee_id):
                 targets = []
                 for link in db.query(EmployeeMap).filter(EmployeeMap.employee_id == employee.id).all():
                     device = db.get(Device, link.device_pk)
-                    targets.append((device.name, device.ip, device.port, device.comm_password, link.device_user_id))
+                    targets.append((device.id, device.name, device.ip, device.port, device.comm_password, link.device_user_id))
 
-                for device_name, device_ip, device_port, comm_password, device_user_id in targets:
+                for target_device_pk, device_name, device_ip, device_port, comm_password, device_user_id in targets:
                     def work():
                         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
                         system.connect()
@@ -1424,7 +1420,7 @@ def employee_edit(employee_id):
                         finally:
                             system.disconnect()
                     try:
-                        run_device_op(device_ip, device_port, device_name, work)
+                        run_device_op(target_device_pk, device_name, work)
                         results.append(f"{device_name}: actualizado")
                     except Exception as e:
                         results.append(f"{device_name}: error ({e})")

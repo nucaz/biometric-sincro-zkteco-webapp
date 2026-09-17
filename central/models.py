@@ -35,6 +35,23 @@ class Device(Base):
     employee_links = relationship("EmployeeMap", back_populates="device")
 
 
+class DeviceLock(Base):
+    """Cross-process advisory lock for one physical device -- a ZK terminal
+    only accepts one live session at a time, and the web app (waitress)
+    and a scheduled `python -m central.sync` run are separate OS
+    processes that can't see each other's in-memory state, so this has to
+    live in the shared DB instead of a plain threading.Lock. See
+    central/device_lock.py for acquire/release; a lock older than its
+    staleness window is treated as abandoned (the process that took it
+    died or leaked past central.webapp's own hard timeout) and can be
+    taken over instead of blocking forever."""
+    __tablename__ = "device_locks"
+
+    device_pk = Column(Integer, primary_key=True)
+    locked_at = Column(DateTime, nullable=False)
+    locked_by = Column(String(150), nullable=True)  # hostname:pid, best-effort, for diagnostics only
+
+
 class AttendanceLog(Base):
     """One raw punch. device_user_id is the ID as enrolled on that specific
     device -- it is only unique WITHIN a device, never across devices, so

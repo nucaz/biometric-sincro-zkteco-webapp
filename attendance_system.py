@@ -3,29 +3,6 @@ import pandas as pd
 from dateutil import parser
 from datetime import datetime, time
 import socket
-import threading
-
-_device_locks_guard = threading.Lock()
-_device_locks = {}
-
-
-def device_lock(key):
-    """One threading.Lock per physical device, keyed by e.g. (ip, port).
-    A ZK terminal only accepts one live session at a time, so every
-    connect-to-this-device code path *within the same process* (central.sync,
-    the web panel's device buttons, a "sincronizar todos" run) should hold
-    this before talking to it, instead of piling concurrent connection
-    attempts onto the same device -- that just makes every one of them fail
-    or hang, which is worse than making a caller wait or back off.
-    Does NOT protect across separate OS processes: a scheduled
-    `python -m central.sync` run is its own process and can't see a lock
-    held here by the web app's process."""
-    with _device_locks_guard:
-        lock = _device_locks.get(key)
-        if lock is None:
-            lock = threading.Lock()
-            _device_locks[key] = lock
-        return lock
 
 
 def check_network_reachable(ip_address, port, timeout=3):
