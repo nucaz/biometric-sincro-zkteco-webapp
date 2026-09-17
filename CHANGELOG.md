@@ -12,6 +12,15 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- La vista "Resumen por día" (y sus exports CSV/Excel/PDF) solo mostraba
+  Entrada/Salida (primera y última marcación) -- si alguien marcaba
+  también al salir/entrar de almuerzo, esas marcaciones de en medio
+  quedaban contadas en "Marcaciones" con el aviso "revisar" pero nunca
+  se veían ni se exportaban, sin más remedio que ir a "Marcaciones
+  crudas" y filtrar a mano. Ahora hay una columna "Todas las
+  marcaciones" con la hora exacta de cada toque del día, en pantalla y
+  en los tres exports (el PDF de esta vista pasó a horizontal para que
+  entre sin truncar).
 - Botón "Resetear contraseña" en Cuentas (solo super admin): fija una
   contraseña nueva para cualquier usuario del panel sin necesitar la
   anterior.

@@ -43,10 +43,10 @@
 </div>
 
 {% if view == 'grouped' %}
-<p class="muted">Entrada = primera marcación del día, Salida = última (solo si hubo más de una). "Marcaciones" cuenta cuántas veces tocó el sensor ese día — varias en pocos segundos suelen ser reintentos de la misma persona, no gente distinta.</p>
+<p class="muted">Entrada = primera marcación del día, Salida = última (solo si hubo más de una). "Marcaciones" cuenta cuántas veces tocó el sensor ese día — varias en pocos segundos suelen ser reintentos de la misma persona, no gente distinta; separadas por horas (ej. salida e ingreso de almuerzo) son marcaciones reales, y se listan en "Todas las marcaciones".</p>
 <table>
   <thead>
-    <tr><th>Sede</th><th>Dispositivo</th><th>Empleado</th><th>ID</th><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Marcaciones</th></tr>
+    <tr><th>Sede</th><th>Dispositivo</th><th>Empleado</th><th>ID</th><th>Fecha</th><th>Entrada</th><th>Salida</th><th>Marcaciones</th><th>Todas las marcaciones</th></tr>
   </thead>
   <tbody>
     {% for r in records %}
@@ -59,9 +59,10 @@
       <td>{{ r.check_in.strftime('%H:%M:%S') }}</td>
       <td>{{ r.check_out.strftime('%H:%M:%S') if r.check_out else '-' }}</td>
       <td>{{ r.punches }}{% if r.punches > 2 %} <span class="badge warn">revisar</span>{% endif %}</td>
+      <td>{% if r.punches > 2 %}{{ r.all_times_str }}{% else %}-{% endif %}</td>
     </tr>
     {% else %}
-    <tr><td colspan="8" class="muted">Sin registros para este filtro.</td></tr>
+    <tr><td colspan="9" class="muted">Sin registros para este filtro.</td></tr>
     {% endfor %}
   </tbody>
 </table>

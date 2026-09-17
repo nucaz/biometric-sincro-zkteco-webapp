@@ -356,6 +356,11 @@ def _group_by_day(rows, db):
         bucket["check_in"] = ts[0]
         bucket["check_out"] = ts[-1] if len(ts) > 1 else None
         bucket["punches"] = len(ts)
+        # Entrada/Salida alone hide a lunch-break out/in (or any punch in
+        # between) -- keep every time that day so both the screen and the
+        # exports can show what's actually behind a "revisar" count > 2,
+        # instead of forcing a trip to "Marcaciones crudas" to see them.
+        bucket["all_times_str"] = ", ".join(t.strftime("%H:%M:%S") for t in ts)
         grouped.append(bucket)
     grouped.sort(key=lambda g: (g["date"], g["employee"]), reverse=True)
     return grouped
@@ -442,11 +447,12 @@ def _export_table(db, args):
     rows = filtered.all()
 
     if args.get("view", "grouped") == "grouped":
-        headers = ["Sede", "Dispositivo", "Empleado", "ID", "Fecha", "Entrada", "Salida", "Marcaciones"]
+        headers = ["Sede", "Dispositivo", "Empleado", "ID", "Fecha", "Entrada", "Salida", "Marcaciones", "Todas las marcaciones"]
         table = [[
             g["sede"], g["device_name"], g["employee"], g["device_user_id"],
             g["date"].strftime("%Y-%m-%d"), g["check_in"].strftime("%H:%M:%S"),
             g["check_out"].strftime("%H:%M:%S") if g["check_out"] else "", g["punches"],
+            g["all_times_str"],
         ] for g in _group_by_day(rows, db)]
     else:
         headers = ["Sede", "Dispositivo", "Empleado", "ID", "Fecha", "Hora", "Estado"]
@@ -558,7 +564,7 @@ class _ReportPDF:
     between the two PDF exports (dashboard + device users, if that ever
     grows one)."""
 
-    def __init__(self, title, subtitle):
+    def __init__(self, title, subtitle, orientation="P"):
         from fpdf import FPDF
 
         class PDF(FPDF):
@@ -568,7 +574,7 @@ class _ReportPDF:
                 self.set_text_color(150, 150, 150)
                 self.cell(0, 10, f"Página {self.page_no()}/{{nb}} · Develop Juan Carlos Aguirre Alvarado - Infraestructura TI & Ciberseguridad Apps", align="C")
 
-        self.pdf = PDF()
+        self.pdf = PDF(orientation=orientation)
         self.pdf.alias_nb_pages()
         self.pdf.add_page()
         self.pdf.set_font("Arial", "B", 16)
@@ -611,9 +617,13 @@ def export_pdf():
     db = SessionLocal()
     try:
         headers, table = _export_table(db, request.args)
-        report = _ReportPDF("Reporte de Asistencia", _export_subtitle(request.args))
-        if request.args.get("view", "grouped") == "grouped":
-            col_widths = [28, 25, 45, 20, 22, 20, 20, 22]
+        is_grouped = request.args.get("view", "grouped") == "grouped"
+        # Landscape for the grouped view -- "Todas las marcaciones" can list
+        # half a dozen times for one day and needs the extra width portrait
+        # doesn't have.
+        report = _ReportPDF("Reporte de Asistencia", _export_subtitle(request.args), orientation="L" if is_grouped else "P")
+        if is_grouped:
+            col_widths = [24, 22, 31, 16, 20, 18, 18, 22, 106]
         else:
             col_widths = [28, 25, 55, 22, 25, 22, 25]
         report.table(headers, table, col_widths)
