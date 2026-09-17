@@ -50,9 +50,15 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     quién está enrolado en ESE reloj físico, con alta/edición/baja directa
     (busca por ID/DNI, apellido o código) — escribe en el equipo real vía
     el SDK (`attendance_system.py` -> `create_or_update_user` /
-    `delete_device_user`). Editar un empleado en el maestro central
+    `delete_device_user`). Incluye el privilegio ("Usuario" o
+    "Administrador del equipo" -- este último es quien puede operar el
+    menú físico y hacer respaldo por USB en ese reloj) y su PIN local
+    para ese mismo menú/respaldo, independiente de la "comm key" del
+    dispositivo (usada por esta app para conectarse remotamente) y de la
+    clave de este panel web. Editar un empleado en el maestro central
     también puede empujar el nombre nuevo a todos los relojes donde esté
-    vinculado.
+    vinculado, y desactivarlo puede eliminar su enrolamiento de esos
+    mismos relojes (ver más abajo).
   - **Empleados**: maestro central, y pantalla "Sin vincular" para
     asignarle nombre real a los `NN-xxxxx`. Al editar uno con "Propagar
     a los relojes" marcado: si cambia el nombre, lo actualiza en cada
@@ -60,11 +66,12 @@ funcionar igual con el ZK30 y el ZKG3 en cuanto tengas su IP; solo usa
     tarjeta de esos mismos relojes (revoca el acceso físico real) --
     en ambos casos su historial de marcaciones en la base central
     nunca se toca.
-  - **Cuentas** (solo super admin): alta/baja, Resetear contraseña (fija
-    una nueva sin necesitar la anterior), Resetear 2FA y Desbloquear
-    (tras 3 intentos fallidos de inicio de sesión -- el bloqueo es por
-    cuenta, nunca por IP/equipo, así que otra cuenta desde la misma
-    máquina sigue funcionando normal).
+  - **Cuentas** (solo super admin): alta, Eliminar (no puedes borrar la
+    tuya propia), Desactivar/Activar, Resetear contraseña (fija una
+    nueva sin necesitar la anterior), Resetear 2FA y Desbloquear (tras
+    3 intentos fallidos de inicio de sesión -- el bloqueo es por cuenta,
+    nunca por IP/equipo, así que otra cuenta desde la misma máquina
+    sigue funcionando normal).
   - **Backup**: solo para super administradores.
 
 ### Roles

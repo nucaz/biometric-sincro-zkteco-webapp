@@ -1148,6 +1148,7 @@ def device_user_new(device_pk):
             name = request.form["name"].strip()
             privilege = zk_const.USER_ADMIN if request.form.get("privilege") == "admin" else zk_const.USER_DEFAULT
             card = request.form.get("card", "").strip()
+            device_password = request.form.get("device_password", "").strip()
             employee_id = request.form.get("employee_id")
             device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
 
@@ -1159,7 +1160,7 @@ def device_user_new(device_pk):
                 try:
                     return system.create_or_update_user(
                         user_id=user_id, name=name, privilege=privilege,
-                        card=int(card) if card.isdigit() else 0,
+                        card=int(card) if card.isdigit() else 0, password=device_password,
                     )
                 finally:
                     system.disconnect()
@@ -1204,6 +1205,7 @@ def device_user_edit(device_pk, user_id):
             name = request.form["name"].strip()
             privilege = zk_const.USER_ADMIN if request.form.get("privilege") == "admin" else zk_const.USER_DEFAULT
             card = request.form.get("card", "").strip()
+            device_password = request.form.get("device_password", "").strip()
             employee_id = request.form.get("employee_id")
             device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
 
@@ -1218,7 +1220,7 @@ def device_user_edit(device_pk, user_id):
                 try:
                     system.create_or_update_user(
                         user_id=user_id, name=name, privilege=privilege,
-                        card=int(card) if card.isdigit() else 0,
+                        card=int(card) if card.isdigit() else 0, password=device_password,
                     )
                 finally:
                     system.disconnect()
@@ -1580,6 +1582,31 @@ def user_toggle(user_pk):
             user.active = not user.active
             db.commit()
             _audit(db, "account_toggle", target=user.username, detail="activo" if user.active else "desactivado")
+        return redirect(url_for("users_list"))
+    finally:
+        db.close()
+
+
+@app.route("/users/<int:user_pk>/delete", methods=["POST"])
+@super_admin_required
+def user_delete(user_pk):
+    """Hard delete -- unlike a device (whose history lives in
+    attendance_log via a foreign key), there's nothing else in the schema
+    that references a User by id except TrustedDevice (cleaned up here) and
+    audit_log, which stores the username as a plain string and is
+    unaffected by the account going away."""
+    db = SessionLocal()
+    try:
+        user = db.get(User, user_pk) or abort_404()
+        if user.id == flask_session.get("user_id"):
+            flash("No puedes eliminar tu propia cuenta.")
+            return redirect(url_for("users_list"))
+        username = user.username
+        db.query(TrustedDevice).filter(TrustedDevice.user_id == user.id).delete()
+        db.delete(user)
+        db.commit()
+        _audit(db, "account_delete", target=username)
+        flash(f"Cuenta '{username}' eliminada.")
         return redirect(url_for("users_list"))
     finally:
         db.close()

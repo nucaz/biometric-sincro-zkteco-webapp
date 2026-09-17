@@ -38,6 +38,12 @@
           <button type="submit" class="btn danger">Resetear 2FA</button>
         </form>
         {% endif %}
+        {% if u.username != current_username %}
+        <form class="inline-form" method="post" action="{{ url_for('user_delete', user_pk=u.id) }}"
+              onsubmit="return confirm('¿Eliminar la cuenta \'{{ u.username }}\' del panel? Es permanente -- para solo bloquearle el acceso sin borrar la cuenta, usa \'Desactivar\'.');">
+          <button type="submit" class="btn danger">Eliminar</button>
+        </form>
+        {% endif %}
       </td>
     </tr>
     {% endfor %}

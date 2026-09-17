@@ -24,6 +24,14 @@
   <label>Tarjeta (opcional)
     <input type="text" name="card" placeholder="Número de tarjeta, si aplica" value="{{ editing_user.card if editing_user and editing_user.card else '' }}">
   </label>
+  <label>Contraseña/PIN del dispositivo (opcional)
+    <input type="text" name="device_password" maxlength="8"
+           placeholder="Para uso local en el equipo: menú físico, respaldo por USB, etc."
+           value="{{ editing_user.password if editing_user else '' }}">
+  </label>
+  {% if editing_user %}
+  <p class="muted" style="margin-top:-8px;">Es el PIN de ESTE reloj para ESTE usuario (nada que ver con tu clave del panel web ni con la "comm key" del dispositivo). Se muestra tal cual está guardado -- déjalo así para no tocarlo, bórralo para quitarlo, o escribe uno nuevo para reemplazarlo.</p>
+  {% endif %}
   <label>Vincular a empleado del maestro (opcional)
     <select name="employee_id">
       <option value="">— sin vincular —</option>

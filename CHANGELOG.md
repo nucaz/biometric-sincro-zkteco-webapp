@@ -12,6 +12,14 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- Botón "Eliminar" para cuentas del panel web (solo super admin, no
+  puedes eliminar la tuya propia) -- antes solo se podían desactivar.
+- "Usuarios de un dispositivo": campo para ver/cambiar/resetear la
+  contraseña (PIN) local de cada usuario del reloj -- la que se usa en
+  el menú físico del equipo y para el respaldo por USB, independiente
+  de la "comm key" del dispositivo y de la clave del panel web. Ya
+  existía la forma de marcar a alguien como "Administrador del equipo"
+  (Privilegio) y de eliminarlo, pero no de gestionar su PIN.
 - La vista "Resumen por día" (y sus exports CSV/Excel/PDF) solo mostraba
   Entrada/Salida (primera y última marcación) -- si alguien marcaba
   también al salir/entrar de almuerzo, esas marcaciones de en medio
@@ -53,6 +61,12 @@ para el procedimiento completo de release.
 - Flujo de release versionado por tags de Git + GitHub Actions.
 
 ### Corregido
+- Editar un usuario del reloj desde el panel (aunque fuera solo para
+  corregir el nombre) borraba en silencio su PIN local, porque
+  `create_or_update_user` siempre mandaba `password=''` al dispositivo
+  -- el protocolo ZK no tiene actualización parcial, cada `set_user`
+  reescribe el registro completo. Ahora, si no se especifica una
+  contraseña nueva, se reenvía la que ya tenía en vez de borrarla.
 - Sincronización que fallaba con "TCP packet invalid" en dispositivos con
   transferencias grandes o de red inestable: ahora reintenta hasta 3
   veces con timeout ampliado, y una falla al desconectar ya no tapa el

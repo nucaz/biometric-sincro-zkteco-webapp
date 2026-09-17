@@ -134,7 +134,13 @@ class ZKTecoAttendance:
             print(f"Error loading users: {str(e)}")
 
     def list_device_users(self):
-        """Users currently enrolled on the physical device (not the attendance log)."""
+        """Users currently enrolled on the physical device (not the attendance log).
+        Includes each one's own device password/PIN -- the ZK protocol
+        transmits it back in plain text on get_users(), the same as it's
+        stored on the terminal itself (used for the physical menu / local
+        admin login on that specific unit, e.g. for a USB backup -- nothing
+        to do with comm_password, which is a separate, single per-device
+        remote-access key, or with this web panel's own login)."""
         if not self.conn:
             return []
         users = self.conn.get_users()
@@ -144,17 +150,27 @@ class ZKTecoAttendance:
             'name': u.name,
             'privilege': u.privilege,
             'card': u.card,
+            'password': u.password,
         } for u in users]
 
-    def create_or_update_user(self, user_id, name, privilege=0, password='', card=0):
+    def create_or_update_user(self, user_id, name, privilege=0, password=None, card=0):
         """Create a new employee on the device, or update them if user_id already
         exists there. Matching by user_id (not uid) is what keeps this from ever
-        creating a duplicate person under a second internal slot."""
+        creating a duplicate person under a second internal slot.
+
+        `password` is that person's device PIN (see list_device_users). Pass
+        None (the default) to leave whatever is already set on the device
+        untouched -- the ZK protocol has no partial update, set_user() always
+        writes the full record, so silently sending password='' on every
+        edit would wipe an existing PIN even when nobody meant to touch it.
+        Pass '' explicitly to clear it, or a new value to change it."""
         if not self.conn:
             raise RuntimeError("Not connected to device. Please connect first.")
         user_id = str(user_id)
         existing = next((u for u in self.conn.get_users() if u.user_id == user_id), None)
         uid = existing.uid if existing else None
+        if password is None:
+            password = existing.password if existing else ''
         self.conn.set_user(
             uid=uid, name=name, privilege=privilege,
             password=password, user_id=user_id, card=card,
