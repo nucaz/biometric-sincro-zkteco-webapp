@@ -147,6 +147,27 @@ class AuditLog(Base):
     user_agent = Column(String(255), nullable=True)
 
 
+class RoleModule(Base):
+    """Explicit override of whether one module is open to one role
+    ('viewer' or 'admin' only -- super_admin always sees every module, by
+    design, so they can never lock themselves out of managing this very
+    screen). Absence of a row means "use the built-in default" (see
+    auth.DEFAULT_MODULE_ACCESS) -- NOT "enabled": employees/employees_
+    unmapped default OFF for viewer, same as before this feature existed,
+    so installing it never silently opens something up nobody configured.
+    See central/auth.py (module_required) for where this is enforced and
+    the /permissions screen that manages it."""
+    __tablename__ = "role_modules"
+    __table_args__ = (
+        UniqueConstraint("role", "module", name="uq_role_module"),
+    )
+
+    id = Column(Integer, primary_key=True)
+    role = Column(String(16), nullable=False)
+    module = Column(String(32), nullable=False)
+    enabled = Column(Boolean, nullable=False, default=True)
+
+
 class TrustedDevice(Base):
     """A browser that skipped OTP on its last login because it already
     proved the 6-digit code once. Identified by the hash of a random

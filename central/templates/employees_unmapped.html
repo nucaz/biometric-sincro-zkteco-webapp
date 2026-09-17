@@ -12,6 +12,7 @@
       <td>{{ r.device_user_id }}</td>
       <td>{{ r.reported_name or '-' }}</td>
       <td>
+        {% if can_manage %}
         {% if r.suggested %}
         <form class="inline-form" method="post" action="{{ url_for('employee_map_create') }}" style="display:flex; gap:6px; align-items:center;">
           <input type="hidden" name="device_pk" value="{{ r.device_pk }}">
@@ -33,6 +34,9 @@
           <input type="text" name="new_employee_name" placeholder="Nombre si es nuevo" style="max-width:160px;">
           <button type="submit">Vincular</button>
         </form>
+        {% endif %}
+        {% else %}
+        <span class="muted">—</span>
         {% endif %}
       </td>
     </tr>

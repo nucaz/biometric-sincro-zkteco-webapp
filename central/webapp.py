@@ -29,9 +29,12 @@ from sqlalchemy import func
 
 from attendance_system import ZKTecoAttendance, check_network_reachable
 from central.db import SessionLocal, init_db
-from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog
+from central.models import Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog, RoleModule
 from central import device_lock
-from central.auth import login_required, admin_required, super_admin_required, verify_password, hash_password, ROLE_LABELS
+from central.auth import (
+    login_required, admin_required, super_admin_required, verify_password, hash_password,
+    ROLE_LABELS, module_required, module_enabled, MODULES, CONFIGURABLE_ROLES, DEFAULT_MODULE_ACCESS,
+)
 from central.sync import sync_all, sync_device, backup_device
 from central.backup import export_data, import_data
 from central.twofa import (
@@ -79,6 +82,7 @@ def inject_role():
         "current_username": flask_session.get("username"),
         "can_manage": role in ("admin", "super_admin"),
         "is_super_admin": role == "super_admin",
+        "module_enabled": lambda m: module_enabled(role, m),
     }
 
 
@@ -391,7 +395,7 @@ def _apply_filters(query, args):
 
 
 @app.route("/")
-@login_required
+@module_required("dashboard")
 def dashboard():
     db = SessionLocal()
     try:
@@ -478,7 +482,7 @@ def _export_subtitle(args):
 
 
 @app.route("/export.csv")
-@login_required
+@module_required("dashboard")
 def export_csv():
     db = SessionLocal()
     try:
@@ -496,7 +500,7 @@ def export_csv():
 
 
 @app.route("/export.xlsx")
-@login_required
+@module_required("dashboard")
 def export_xlsx():
     from openpyxl import Workbook
     from openpyxl.styles import Font, PatternFill, Alignment
@@ -612,7 +616,7 @@ class _ReportPDF:
 
 
 @app.route("/export.pdf")
-@login_required
+@module_required("dashboard")
 def export_pdf():
     db = SessionLocal()
     try:
@@ -640,7 +644,7 @@ def export_pdf():
 # ------------------------------------------------------------- devices ----
 
 @app.route("/devices")
-@login_required
+@module_required("devices")
 def devices_status():
     db = SessionLocal()
     try:
@@ -1312,7 +1316,7 @@ def device_user_delete(device_pk, user_id):
 # --------------------------------------------------------- employee master --
 
 @app.route("/employees")
-@admin_required
+@module_required("employees")
 def employees_list():
     db = SessionLocal()
     try:
@@ -1469,7 +1473,7 @@ def employee_edit(employee_id):
 
 
 @app.route("/employees/unmapped")
-@admin_required
+@module_required("employees_unmapped")
 def employees_unmapped():
     """(device, device_user_id) pairs seen in attendance_log that have no
     EmployeeMap yet -- the quickest way to clear out "NN-xxxxx" names."""
@@ -1526,6 +1530,52 @@ def employee_map_create():
         _audit(db, "employee_link", target=f"device {device_pk}: {device_user_id}", detail=f"employee_id={employee_id}")
         flash("Vinculado correctamente.")
         return redirect(url_for("employees_unmapped"))
+    finally:
+        db.close()
+
+
+# ----------------------------------------------------------- permisos ----
+
+@app.route("/permissions", methods=["GET", "POST"])
+@super_admin_required
+def permissions_page():
+    """Lets a super_admin turn a whole module's view routes on/off for
+    'viewer' and 'admin' -- see central/auth.py (module_required) for how
+    this is enforced and MODULES for the full list. super_admin itself is
+    never restricted here, by design."""
+    db = SessionLocal()
+    try:
+        if request.method == "POST":
+            changes = []
+            existing_rows = {(r.role, r.module): r for r in db.query(RoleModule).all()}
+            for role in CONFIGURABLE_ROLES:
+                for module in MODULES:
+                    enabled = bool(request.form.get(f"{role}__{module}"))
+                    default = DEFAULT_MODULE_ACCESS.get(module, {}).get(role, False)
+                    existing = existing_rows.get((role, module))
+                    if existing:
+                        if existing.enabled != enabled:
+                            existing.enabled = enabled
+                            changes.append(f"{role}/{module}: {'habilitado' if enabled else 'deshabilitado'}")
+                    elif enabled != default:
+                        db.add(RoleModule(role=role, module=module, enabled=enabled))
+                        changes.append(f"{role}/{module}: {'habilitado' if enabled else 'deshabilitado'}")
+            db.commit()
+            if changes:
+                _audit(db, "permissions_edit", detail="; ".join(changes))
+                flash("Permisos actualizados.")
+            else:
+                flash("Sin cambios.")
+            return redirect(url_for("permissions_page"))
+
+        current = {
+            (role, module): module_enabled(role, module)
+            for role in CONFIGURABLE_ROLES for module in MODULES
+        }
+        return render_template(
+            "permissions.html", modules=MODULES, roles=CONFIGURABLE_ROLES,
+            role_labels=ROLE_LABELS, current=current,
+        )
     finally:
         db.close()
 
@@ -1690,6 +1740,31 @@ def account_security():
             "account_security.html", user=user, trusted=trusted, recent_logins=recent_logins,
             session_ip=flask_session.get("client_ip"), session_hostname=flask_session.get("client_hostname"),
         )
+    finally:
+        db.close()
+
+
+@app.route("/account/security/change_password", methods=["POST"])
+@login_required
+def change_password():
+    """Self-service, distinct from the super_admin-only /users/<id>/reset_password:
+    requires the CURRENT password, so a session left open on someone
+    else's machine can't be used to lock the real owner out."""
+    db = SessionLocal()
+    try:
+        user = db.get(User, flask_session["user_id"])
+        if not verify_password(request.form.get("current_password", ""), user.password_hash):
+            flash("Contraseña actual incorrecta -- no se cambió nada.")
+            return redirect(url_for("account_security"))
+        new_password = request.form.get("new_password", "")
+        if len(new_password) < 6:
+            flash("La contraseña nueva debe tener al menos 6 caracteres.")
+            return redirect(url_for("account_security"))
+        user.password_hash = hash_password(new_password)
+        db.commit()
+        _audit(db, "account_change_password", target=user.username)
+        flash("Contraseña actualizada.")
+        return redirect(url_for("account_security"))
     finally:
         db.close()
 

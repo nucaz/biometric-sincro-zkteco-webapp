@@ -3,23 +3,25 @@
 {% block content %}
 <div class="toolbar">
   <h2 style="margin:0;">Maestro de empleados</h2>
+  {% if can_manage %}
   <div style="display:flex; gap:8px;">
     <a class="btn secondary" href="{{ url_for('employees_import') }}">Importar desde Excel</a>
     <a class="btn" href="{{ url_for('employee_new') }}">+ Agregar empleado</a>
   </div>
+  {% endif %}
 </div>
 <table>
-  <thead><tr><th>Código</th><th>Nombre</th><th>Estado</th><th></th></tr></thead>
+  <thead><tr><th>Código</th><th>Nombre</th><th>Estado</th>{% if can_manage %}<th></th>{% endif %}</tr></thead>
   <tbody>
     {% for e in employees %}
     <tr>
       <td>{{ e.code or '-' }}</td>
       <td>{{ e.full_name }}</td>
       <td>{% if e.active %}Activo{% else %}<span class="badge warn">Inactivo</span>{% endif %}</td>
-      <td><a class="btn secondary" href="{{ url_for('employee_edit', employee_id=e.id) }}">Editar</a></td>
+      {% if can_manage %}<td><a class="btn secondary" href="{{ url_for('employee_edit', employee_id=e.id) }}">Editar</a></td>{% endif %}
     </tr>
     {% else %}
-    <tr><td colspan="4" class="muted">Sin empleados registrados todavía.</td></tr>
+    <tr><td colspan="{{ 4 if can_manage else 3 }}" class="muted">Sin empleados registrados todavía.</td></tr>
     {% endfor %}
   </tbody>
 </table>

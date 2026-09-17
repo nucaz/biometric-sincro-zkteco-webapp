@@ -1,0 +1,26 @@
+{% extends "base.html" %}
+{% block title %}Permisos{% endblock %}
+{% block content %}
+<h2>Permisos por módulo</h2>
+<p class="muted">Controla qué módulos puede ABRIR cada rol. Nunca le da a "Solo lectura" permisos de escritura (eso sigue guardado dentro de cada pantalla), ni le da a "Administrador" las pantallas exclusivas de Super administrador (Cuentas, Backup, Auditoría, Permisos) -- esas siguen fijas por diseño.</p>
+<form method="post" class="card" style="max-width:520px;">
+  <table>
+    <thead>
+      <tr><th>Módulo</th>{% for role in roles %}<th style="text-align:center;">{{ role_labels[role] }}</th>{% endfor %}</tr>
+    </thead>
+    <tbody>
+      {% for module, label in modules.items() %}
+      <tr>
+        <td>{{ label }}</td>
+        {% for role in roles %}
+        <td style="text-align:center;">
+          <input type="checkbox" name="{{ role }}__{{ module }}" {{ 'checked' if current[(role, module)] else '' }} style="width:auto;">
+        </td>
+        {% endfor %}
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  <button type="submit">Guardar</button>
+</form>
+{% endblock %}

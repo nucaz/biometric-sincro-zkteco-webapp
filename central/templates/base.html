@@ -51,16 +51,15 @@
 <header>
   <strong>Asistencia - Panel RRHH</strong>
   <nav>
-    <a href="{{ url_for('dashboard') }}">Marcaciones</a>
-    <a href="{{ url_for('devices_status') }}">Dispositivos</a>
-    {% if can_manage %}
-    <a href="{{ url_for('employees_list') }}">Empleados</a>
-    <a href="{{ url_for('employees_unmapped') }}">Sin vincular</a>
-    {% endif %}
+    {% if module_enabled('dashboard') %}<a href="{{ url_for('dashboard') }}">Marcaciones</a>{% endif %}
+    {% if module_enabled('devices') %}<a href="{{ url_for('devices_status') }}">Dispositivos</a>{% endif %}
+    {% if module_enabled('employees') %}<a href="{{ url_for('employees_list') }}">Empleados</a>{% endif %}
+    {% if module_enabled('employees_unmapped') %}<a href="{{ url_for('employees_unmapped') }}">Sin vincular</a>{% endif %}
     {% if is_super_admin %}
     <a href="{{ url_for('users_list') }}">Cuentas</a>
     <a href="{{ url_for('backup_page') }}">Backup</a>
     <a href="{{ url_for('audit_log') }}">Auditoría</a>
+    <a href="{{ url_for('permissions_page') }}">Permisos</a>
     {% endif %}
     <a href="{{ url_for('account_security') }}">Seguridad</a>
     <span class="badge role">{{ current_role_label }}</span>

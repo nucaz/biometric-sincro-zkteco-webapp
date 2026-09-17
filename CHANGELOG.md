@@ -12,6 +12,16 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- Pantalla **Permisos** (solo super admin): elige, por módulo, si "Solo
+  lectura" y "Administrador" pueden abrir Marcaciones/Dispositivos/
+  Empleados/Sin vincular -- por defecto queda igual que antes de esta
+  función (nada cambia hasta que alguien lo toque). Nunca le da a "Solo
+  lectura" permisos de escritura (eso lo sigue controlando cada
+  pantalla), ni a "Administrador" las pantallas de Super administrador
+  (Cuentas, Backup, Auditoría, Permisos), que siguen fijas.
+- Cualquier usuario puede cambiar su propia contraseña desde
+  Seguridad, pidiendo la actual -- antes solo un super admin podía
+  resetearla (sin pedir la anterior, para el caso de olvido).
 - Botón "Eliminar" para cuentas del panel web (solo super admin, no
   puedes eliminar la tuya propia) -- antes solo se podían desactivar.
 - "Usuarios de un dispositivo": campo para ver/cambiar/resetear la
