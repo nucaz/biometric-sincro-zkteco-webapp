@@ -18,12 +18,17 @@ ROLE_LABELS = {"super_admin": "Super administrador", "admin": "Administrador", "
 # import are privilege-escalation-adjacent, not something to soften with
 # a checkbox).
 MODULES = {
+    "reports_overview": "Panel",
     "dashboard": "Marcaciones",
     "export": "Exportar marcaciones",
     "devices": "Dispositivos",
     "device_users": "Usuarios del dispositivo",
     "employees": "Empleados",
     "employees_unmapped": "Sin vincular",
+    "schedules": "Horarios",
+    "attendance_exceptions": "Vacaciones y permisos",
+    "reports_absences": "Reporte de faltas",
+    "reports_hours": "Tardanzas y horas extra",
 }
 CONFIGURABLE_ROLES = ("viewer", "admin")
 
@@ -33,12 +38,17 @@ CONFIGURABLE_ROLES = ("viewer", "admin")
 # access on its own. Only a super_admin flipping a checkbox in
 # /permissions departs from this.
 DEFAULT_MODULE_ACCESS = {
+    "reports_overview": {"viewer": True, "admin": True},
     "dashboard": {"viewer": True, "admin": True},
     "export": {"viewer": True, "admin": True},
     "devices": {"viewer": True, "admin": True},
     "device_users": {"viewer": False, "admin": True},
     "employees": {"viewer": False, "admin": True},
     "employees_unmapped": {"viewer": False, "admin": True},
+    "schedules": {"viewer": False, "admin": True},
+    "attendance_exceptions": {"viewer": False, "admin": True},
+    "reports_absences": {"viewer": True, "admin": True},
+    "reports_hours": {"viewer": True, "admin": True},
 }
 
 

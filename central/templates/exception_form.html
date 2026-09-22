@@ -1,0 +1,34 @@
+{% extends "base.html" %}
+{% block title %}Nueva excepción{% endblock %}
+{% block content %}
+<h2>Registrar vacaciones / permiso / descanso médico</h2>
+<form class="card" method="post" style="max-width:480px;">
+  <label>Empleado
+    <select name="employee_id" required>
+      <option value="">Selecciona...</option>
+      {% for e in employees %}
+      <option value="{{ e.id }}" {{ 'selected' if preselected == e.id }}>{{ e.full_name }}{% if e.code %} ({{ e.code }}){% endif %}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Tipo
+    <select name="kind" required>
+      {% for k in kinds %}
+      <option value="{{ k }}">{{ kind_labels[k] }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <div style="display:flex; gap:12px;">
+    <label style="flex:1;">Desde
+      <input type="date" name="date_from" required>
+    </label>
+    <label style="flex:1;">Hasta
+      <input type="date" name="date_to" required>
+    </label>
+  </div>
+  <label>Nota (opcional)
+    <input type="text" name="note" placeholder="Ej. Descanso pre/post natal, cita médica...">
+  </label>
+  <button type="submit">Guardar</button>
+</form>
+{% endblock %}

@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 from sqlalchemy import (
-    Column, Integer, String, DateTime, ForeignKey, UniqueConstraint, Text, Boolean
+    Column, Integer, String, DateTime, Date, Time, ForeignKey, UniqueConstraint, Text, Boolean
 )
 from sqlalchemy.orm import relationship
 from .db import Base
@@ -65,7 +65,10 @@ class AttendanceLog(Base):
     device_pk = Column(Integer, ForeignKey("devices.id"), nullable=False)
     device_user_id = Column(String(32), nullable=False)
     user_name = Column(String(120), nullable=True)  # name as reported by the device at sync time
-    timestamp = Column(DateTime, nullable=False)
+    # Indexed on its own (not just as part of uq_device_user_ts) -- reports
+    # now scan by date range across every device/employee at once instead
+    # of one device_pk + device_user_id at a time.
+    timestamp = Column(DateTime, nullable=False, index=True)
     status = Column(String(32), nullable=True)  # 'Check In' / 'Check Out' / 'Unknown Punch (n)'
     synced_at = Column(DateTime, default=utcnow, nullable=False)
 
@@ -75,16 +78,48 @@ class AttendanceLog(Base):
 class Employee(Base):
     """Master employee record, independent of any one device. One employee
     can be linked (via EmployeeMap) to a different device_user_id at every
-    sede they're enrolled in."""
+    sede they're enrolled in. `code` is the DNI by convention -- it's what
+    a device's own user_id/ID usually already is, so a matching code is
+    how employees_unmapped() suggests a link.
+
+    `nombre`/`apellido_paterno`/`apellido_materno` are optional and purely
+    additive: when any of them is filled, webapp.py recomputes `full_name`
+    from them on save (nombre + apellido_paterno + apellido_materno). When
+    they're left blank, `full_name` stays whatever was typed directly --
+    this keeps the original one-field quick-add working for an employee
+    who doesn't need (or have) a structured name on file."""
     __tablename__ = "employees"
 
     id = Column(Integer, primary_key=True)
-    code = Column(String(32), unique=True, nullable=True)  # your own HR/payroll code, optional
+    code = Column(String(32), unique=True, nullable=True)  # DNI, by convention -- see class docstring
     full_name = Column(String(120), nullable=False)
+    nombre = Column(String(80), nullable=True)
+    apellido_paterno = Column(String(80), nullable=True)
+    apellido_materno = Column(String(80), nullable=True)
+    fecha_nacimiento = Column(Date, nullable=True)
+    celular = Column(String(32), nullable=True)
+    correo_personal = Column(String(120), nullable=True)
+    correo_corporativo = Column(String(120), nullable=True)
+    direccion = Column(String(255), nullable=True)
+    area = Column(String(80), nullable=True)
+    # Independent of which device/sede the employee actually punches at
+    # (that's EmployeeMap -> Device.sede, used by every attendance report's
+    # sede filter, and untouched by this field) -- this is the sede they
+    # administratively belong to, editable even before they have any
+    # device link at all.
+    sede = Column(String(120), nullable=True)
     active = Column(Boolean, nullable=False, default=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
 
     device_links = relationship("EmployeeMap", back_populates="employee")
+    schedule_assignments = relationship(
+        "EmployeeSchedule", back_populates="employee",
+        order_by="EmployeeSchedule.effective_from.desc()",
+    )
+    exceptions = relationship(
+        "AttendanceException", back_populates="employee",
+        order_by="AttendanceException.date_from.desc()",
+    )
 
 
 class EmployeeMap(Base):
@@ -100,7 +135,9 @@ class EmployeeMap(Base):
     id = Column(Integer, primary_key=True)
     device_pk = Column(Integer, ForeignKey("devices.id"), nullable=False)
     device_user_id = Column(String(32), nullable=False)
-    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    # Indexed -- attendance reports join AttendanceLog -> EmployeeMap and
+    # then filter/group by employee_id across a date range.
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
 
     device = relationship("Device", back_populates="employee_links")
     employee = relationship("Employee", back_populates="device_links")
@@ -166,6 +203,92 @@ class RoleModule(Base):
     role = Column(String(16), nullable=False)
     module = Column(String(32), nullable=False)
     enabled = Column(Boolean, nullable=False, default=True)
+
+
+class Schedule(Base):
+    """A configurable type of shift ('horario') -- a super_admin/admin
+    manages these from /schedules. Each one carries its OWN tardiness
+    tolerance and lunch window rather than a single company-wide rule,
+    and its own explicit day-of-week flags rather than a fixed L-V/L-S
+    preset -- different areas/stores/branches were confirmed to have work
+    weeks that don't follow a common pattern (e.g. rest day varies by
+    store agreement), so every weekday needs its own on/off flag."""
+    __tablename__ = "schedules"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)
+    entry_time = Column(Time, nullable=False)
+    tolerance_minutes = Column(Integer, nullable=False, default=0)
+    # Nullable at the DB level even though the form always requires it --
+    # a schedule created before this field existed has NULL here until
+    # someone opens it in /schedules and saves it again, and the
+    # attendance engine has to degrade gracefully (no overtime evaluated)
+    # instead of crashing on that old row.
+    exit_time = Column(Time, nullable=True)
+    lunch_start = Column(Time, nullable=True)
+    lunch_end = Column(Time, nullable=True)
+    work_mon = Column(Boolean, nullable=False, default=True)
+    work_tue = Column(Boolean, nullable=False, default=True)
+    work_wed = Column(Boolean, nullable=False, default=True)
+    work_thu = Column(Boolean, nullable=False, default=True)
+    work_fri = Column(Boolean, nullable=False, default=True)
+    work_sat = Column(Boolean, nullable=False, default=False)
+    work_sun = Column(Boolean, nullable=False, default=False)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    assignments = relationship("EmployeeSchedule", back_populates="schedule")
+
+    # Index 0 = Monday, matching date.weekday() -- see works_on().
+    WEEKDAY_FIELDS = (
+        "work_mon", "work_tue", "work_wed", "work_thu",
+        "work_fri", "work_sat", "work_sun",
+    )
+
+    def works_on(self, date_):
+        return bool(getattr(self, self.WEEKDAY_FIELDS[date_.weekday()]))
+
+
+class EmployeeSchedule(Base):
+    """One period during which an employee had a given schedule assigned.
+    effective_to is null for the currently active assignment -- assigning
+    a new schedule closes the previous open-ended row first (see
+    central/webapp.py's employee_schedule_assign), so "what schedule did
+    employee X have on date Y" is always exactly one row, never an
+    overlap to disambiguate."""
+    __tablename__ = "employee_schedules"
+
+    id = Column(Integer, primary_key=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False)
+    schedule_id = Column(Integer, ForeignKey("schedules.id"), nullable=False)
+    effective_from = Column(Date, nullable=False)
+    effective_to = Column(Date, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    employee = relationship("Employee", back_populates="schedule_assignments")
+    schedule = relationship("Schedule", back_populates="assignments")
+
+
+class AttendanceException(Base):
+    """A justified absence -- vacation, permission, or medical leave.
+    Every calendar day inside [date_from, date_to] for this employee is
+    excluded from the 'falta' count in attendance_rules.compute_attendance
+    and shown as 'justificado' instead. Deliberately has no approval
+    workflow of its own -- whoever can already manage employees can add
+    one, same trust boundary as the rest of the employee master data."""
+    __tablename__ = "attendance_exceptions"
+
+    KINDS = ("vacaciones", "permiso", "descanso_medico", "otro")
+
+    id = Column(Integer, primary_key=True)
+    employee_id = Column(Integer, ForeignKey("employees.id"), nullable=False, index=True)
+    date_from = Column(Date, nullable=False)
+    date_to = Column(Date, nullable=False)
+    kind = Column(String(20), nullable=False)
+    note = Column(Text, nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+
+    employee = relationship("Employee", back_populates="exceptions")
 
 
 class TrustedDevice(Base):

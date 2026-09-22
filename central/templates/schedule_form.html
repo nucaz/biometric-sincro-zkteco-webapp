@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}{{ 'Editar horario' if schedule else 'Nuevo horario' }}{% endblock %}
+{% block content %}
+<h2>{{ 'Editar horario' if schedule else 'Nuevo horario' }}</h2>
+<form class="card" method="post" style="max-width:560px;">
+  <label>Nombre
+    <input type="text" name="name" value="{{ schedule.name if schedule else '' }}" placeholder="Ej. Tienda mañana, Backoffice L-S" required>
+  </label>
+  <div style="display:flex; gap:12px;">
+    <label style="flex:1;">Hora de ingreso
+      <input type="time" name="entry_time" value="{{ schedule.entry_time.strftime('%H:%M') if schedule else '08:00' }}" required>
+    </label>
+    <label style="flex:1;">Hora de salida
+      <input type="time" name="exit_time" value="{{ schedule.exit_time.strftime('%H:%M') if schedule and schedule.exit_time else '18:00' }}" required>
+    </label>
+  </div>
+  {% if schedule and not schedule.exit_time %}
+  <p class="muted" style="margin:0; color:#b91c1c;">Este horario se creó antes de existir "Hora de salida" -- no se calculan horas extra hasta que guardes este formulario.</p>
+  {% endif %}
+  <label>Tolerancia de tardanza / refrigerio (minutos de gracia)
+    <input type="number" name="tolerance_minutes" min="0" value="{{ schedule.tolerance_minutes if schedule else 0 }}" required>
+  </label>
+  <div style="display:flex; gap:12px;">
+    <label style="flex:1;">Inicio de refrigerio (opcional)
+      <input type="time" name="lunch_start" value="{{ schedule.lunch_start.strftime('%H:%M') if schedule and schedule.lunch_start else '' }}">
+    </label>
+    <label style="flex:1;">Fin de refrigerio (opcional)
+      <input type="time" name="lunch_end" value="{{ schedule.lunch_end.strftime('%H:%M') if schedule and schedule.lunch_end else '' }}">
+    </label>
+  </div>
+  <p class="muted" style="margin-bottom:0;">Deja el refrigerio en blanco si este horario no lo marca en el reloj.</p>
+
+  <div>
+    <span style="font-size:13px; color:#374151;">Días laborables</span>
+    <div style="display:flex; flex-wrap:wrap; gap:12px; margin-top:6px;">
+      {% for field, label in weekday_fields %}
+      <label style="flex-direction: row; align-items: center; gap: 6px;">
+        <input type="checkbox" name="{{ field }}" {{ 'checked' if (schedule[field] if schedule else field not in ('work_sat', 'work_sun')) }} style="width:auto;"> {{ label }}
+      </label>
+      {% endfor %}
+    </div>
+  </div>
+
+  {% if schedule %}
+  <label style="flex-direction: row; align-items: center; gap: 8px;">
+    <input type="checkbox" name="active" {{ 'checked' if schedule.active }} style="width:auto;"> Activo
+  </label>
+  {% endif %}
+  <button type="submit">Guardar</button>
+</form>
+{% endblock %}

@@ -2,13 +2,63 @@
 {% block title %}{{ 'Editar empleado' if employee else 'Nuevo empleado' }}{% endblock %}
 {% block content %}
 <h2>{{ 'Editar empleado' if employee else 'Nuevo empleado' }}</h2>
-<form class="card" method="post">
-  <label>Código (opcional, ej. código de nómina)
-    <input type="text" name="code" value="{{ employee.code if employee else '' }}">
+<form class="card" method="post" style="max-width:640px;">
+  <label>Código (DNI)
+    <input type="text" name="code" value="{{ employee.code if employee else '' }}" placeholder="Ej. 74227277">
   </label>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap;">
+    <label style="flex:1; min-width:160px;">Nombres
+      <input type="text" name="nombre" value="{{ employee.nombre if employee else '' }}">
+    </label>
+    <label style="flex:1; min-width:160px;">Apellido paterno
+      <input type="text" name="apellido_paterno" value="{{ employee.apellido_paterno if employee else '' }}">
+    </label>
+    <label style="flex:1; min-width:160px;">Apellido materno
+      <input type="text" name="apellido_materno" value="{{ employee.apellido_materno if employee else '' }}">
+    </label>
+  </div>
+
   <label>Nombre completo
-    <input type="text" name="full_name" value="{{ employee.full_name if employee else '' }}" required>
+    <input type="text" name="full_name" value="{{ employee.full_name if employee else '' }}" {{ 'required' if not employee }}>
   </label>
+  <p class="muted" style="margin-top:-6px;">Si llenas Nombres/Apellidos arriba, este campo se recalcula solo al guardar. Si los dejas vacíos, se usa tal cual lo que escribas aquí.</p>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap;">
+    <label style="flex:1; min-width:160px;">Fecha de nacimiento
+      <input type="date" name="fecha_nacimiento" value="{{ employee.fecha_nacimiento.strftime('%Y-%m-%d') if employee and employee.fecha_nacimiento else '' }}">
+    </label>
+    <label style="flex:1; min-width:160px;">Celular
+      <input type="text" name="celular" value="{{ employee.celular if employee else '' }}">
+    </label>
+  </div>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap;">
+    <label style="flex:1; min-width:200px;">Correo personal
+      <input type="email" name="correo_personal" value="{{ employee.correo_personal if employee else '' }}">
+    </label>
+    <label style="flex:1; min-width:200px;">Correo corporativo
+      <input type="email" name="correo_corporativo" value="{{ employee.correo_corporativo if employee else '' }}">
+    </label>
+  </div>
+
+  <label>Dirección
+    <input type="text" name="direccion" value="{{ employee.direccion if employee else '' }}">
+  </label>
+
+  <div style="display:flex; gap:12px; flex-wrap:wrap;">
+    <label style="flex:1; min-width:160px;">Área
+      <input type="text" name="area" value="{{ employee.area if employee else '' }}">
+    </label>
+    <label style="flex:1; min-width:160px;">Sede
+      <input type="text" name="sede" list="sede-options" value="{{ employee.sede if employee else '' }}">
+      <datalist id="sede-options">
+        {% for s in known_sedes %}<option value="{{ s }}">{% endfor %}
+      </datalist>
+    </label>
+  </div>
+  <p class="muted" style="margin-top:-6px;">Sede administrativa del empleado -- independiente de en qué dispositivo marca (eso se ve más abajo, en "Vinculado en").</p>
+
   {% if employee %}
   <label style="flex-direction: row; align-items: center; gap: 8px;">
     <input type="checkbox" name="active" {{ 'checked' if employee.active }} style="width:auto;"> Activo
@@ -19,4 +69,89 @@
   {% endif %}
   <button type="submit">Guardar</button>
 </form>
+
+{% if employee %}
+{% if device_links %}
+<h2 style="margin-top:32px;">Vinculado en</h2>
+<div class="card" style="max-width:640px;">
+  <p class="muted" style="margin-top:0;">Dispositivos donde este empleado tiene una identidad vinculada (ver <a href="{{ url_for('employees_unmapped') }}">Sin vincular</a> para cambiar esto).</p>
+  <table>
+    <thead><tr><th>Sede</th><th>Dispositivo</th><th>ID</th></tr></thead>
+    <tbody>
+      {% for link in device_links %}
+      <tr>
+        <td>{{ link.device.sede or '-' }}</td>
+        <td>{{ link.device.name }}</td>
+        <td>{{ link.device_user_id }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+</div>
+{% endif %}
+
+<h2 style="margin-top:32px;">Horario</h2>
+<div class="card" style="max-width:560px;">
+  {% if current_schedule %}
+  <p>Horario actual: <strong>{{ current_schedule.schedule.name }}</strong> (desde {{ current_schedule.effective_from.strftime('%Y-%m-%d') }})</p>
+  {% else %}
+  <p class="muted">Sin horario asignado todavía -- no se evaluará su asistencia en el reporte de faltas hasta que le asignes uno.</p>
+  {% endif %}
+
+  {% if can_manage %}
+  <form method="post" action="{{ url_for('employee_schedule_assign', employee_id=employee.id) }}" style="display:flex; gap:10px; align-items:end; flex-wrap:wrap;">
+    <label>Horario
+      <select name="schedule_id" required>
+        <option value="">Selecciona...</option>
+        {% for s in schedules %}
+        <option value="{{ s.id }}">{{ s.name }} ({{ s.entry_time.strftime('%H:%M') }})</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Vigente desde
+      <input type="date" name="effective_from">
+    </label>
+    <button type="submit">Asignar</button>
+  </form>
+  {% endif %}
+
+  {% if schedule_history %}
+  <table style="margin-top:12px;">
+    <thead><tr><th>Horario</th><th>Desde</th><th>Hasta</th></tr></thead>
+    <tbody>
+      {% for a in schedule_history %}
+      <tr>
+        <td>{{ a.schedule.name }}</td>
+        <td>{{ a.effective_from.strftime('%Y-%m-%d') }}</td>
+        <td>{{ a.effective_to.strftime('%Y-%m-%d') if a.effective_to else 'Vigente' }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% endif %}
+</div>
+
+<h2 style="margin-top:32px;">Vacaciones y permisos</h2>
+<div class="card" style="max-width:560px;">
+  {% if can_manage %}
+  <a class="btn" href="{{ url_for('exception_new', employee_id=employee.id) }}">+ Agregar</a>
+  {% endif %}
+  {% if employee.exceptions %}
+  <table style="margin-top:12px;">
+    <thead><tr><th>Tipo</th><th>Desde</th><th>Hasta</th></tr></thead>
+    <tbody>
+      {% for exc in employee.exceptions %}
+      <tr>
+        <td>{{ exc.kind|replace('_', ' ')|capitalize }}</td>
+        <td>{{ exc.date_from.strftime('%Y-%m-%d') }}</td>
+        <td>{{ exc.date_to.strftime('%Y-%m-%d') }}</td>
+      </tr>
+      {% endfor %}
+    </tbody>
+  </table>
+  {% else %}
+  <p class="muted" style="margin-top:12px;">Sin vacaciones, permisos ni descansos médicos registrados.</p>
+  {% endif %}
+</div>
+{% endif %}
 {% endblock %}

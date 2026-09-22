@@ -12,6 +12,87 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- **Buscador de DNI en "Sin vincular"**: el desplegable plano de
+  empleados (difícil de revisar por DNI en una lista larga) se
+  reemplazó por un campo de búsqueda con autocompletado -- se escribe
+  el DNI, el navegador sugiere coincidencias, y el botón "Vincular" se
+  queda deshabilitado hasta que la coincidencia sea exacta (aparece un
+  "✓ Nombre" en verde confirmándolo) o se escriba un nombre nuevo. Ya no
+  se puede vincular "a ciegas" con una fila parcialmente escrita.
+- **Ficha de empleado enriquecida**: nuevos campos opcionales -- Nombres,
+  Apellido paterno, Apellido materno, Fecha de nacimiento, Celular,
+  Correo personal, Correo corporativo, Dirección, Área y Sede
+  (administrativa, independiente del dispositivo donde marca). Si se
+  llenan Nombres/Apellidos, el "Nombre completo" se arma solo al
+  guardar (Nombres + Apellido paterno + Apellido materno); si se dejan
+  vacíos, el alta rápida de un solo campo de nombre sigue funcionando
+  igual que antes -- nada de esto es obligatorio ni rompe empleados ya
+  cargados. La ficha ahora también muestra en qué dispositivo(s) y con
+  qué ID está vinculado el empleado ("Vinculado en"), y "Empleados"
+  suma columnas de Área y Sede.
+- **Plantilla de Excel descargable** en Empleados y en Horarios
+  ("Descargar plantilla" / "Asignar desde Excel"): un archivo en
+  blanco con los encabezados correctos y una fila de ejemplo, listo
+  para llenar y volver a subir -- ya no hace falta armar el archivo
+  a mano leyendo la lista de columnas soportadas. La importación de
+  empleados ahora reconoce Nombres/Apellidos/Fecha de nacimiento/
+  Celular/Correos/Dirección/Área/Sede además de las columnas que ya
+  soportaba, y al actualizar un empleado existente por código nunca
+  borra un campo que la fila importada simplemente no traía.
+- **Menú lateral izquierdo** en reemplazo de la barra superior: colapsable
+  (botón "Colapsar" al fondo del menú, y un botón flotante para volver a
+  mostrarlo) y de ancho ajustable arrastrando su borde derecho -- ambos
+  se recuerdan entre páginas (en el navegador de quien lo usa, no es un
+  ajuste compartido). Agrupa las pantallas de administración
+  (Cuentas/Backup/Auditoría/Permisos) bajo un rótulo aparte, resalta la
+  pantalla activa, y cada ítem tiene su propio ícono. Sin librerías ni
+  fuentes de íconos externas -- los íconos son SVG in-line
+  (`central/icons.py`), igual de autocontenido que el resto del panel
+  (pensado para un servidor sin salida a internet).
+- **Vacaciones, permisos y descansos médicos** (`/exceptions`, módulo
+  "Vacaciones y permisos"): registro simple por empleado y rango de
+  fechas. Un día dentro de un registro deja de contar como "Falta" en el
+  reporte de faltas y aparece como "Justificado" -- también accesible
+  desde la ficha de cada empleado. Sin flujo de aprobación propio: quien
+  ya puede gestionar empleados puede registrar uno, mismo nivel de
+  confianza que el resto del maestro de empleados.
+- **Asignar horarios desde Excel** (`/schedules/import`): columnas
+  código, horario y vigencia opcional -- mismo patrón que la importación
+  de empleados ya existente (reporta fila por fila qué se asignó y qué
+  falló, sin detener el archivo completo por un error puntual).
+- **Panel** (`/reports/overview`, módulo "Panel"): tarjetas con presentes,
+  tardanzas, faltas, justificados y empleados sin horario asignado de
+  HOY, más una tabla de quién acumula 2 o más faltas en los últimos 30
+  días. Pantalla aparte de "Marcaciones" (que sigue siendo la página de
+  inicio tras iniciar sesión) para no sumarle este cálculo a la pantalla
+  más visitada del panel.
+- **Horarios y reporte de faltas**: maestro de horarios configurable
+  (`/schedules`, módulo "Horarios") -- cada uno con su propia hora de
+  ingreso, hora de salida, tolerancia de tardanza en minutos, ventana de
+  refrigerio (opcional) y sus propios días laborables marcados uno por
+  uno (no un preset L-V/L-S fijo, porque el día de descanso varía
+  libremente según área/tienda/especialidad). Desde la ficha de cada
+  empleado se le asigna un horario con fecha de vigencia -- si cambia de
+  horario, se guarda el historial completo en vez de perder el anterior.
+  Nuevo reporte **Faltas** (`/reports/absences`, módulo "Reporte de
+  faltas"): por rango de fechas y sede, muestra a quién le falta marcar
+  (usando "Desde" = "Hasta" = hoy) o quién acumula más de N faltas en un
+  período, con export a Excel. Un día sin marcación solo cuenta como
+  falta si el horario asignado lo marca como laborable ese día -- días de
+  descanso no entran en el conteo. A los empleados activos sin ningún
+  horario asignado se les avisa aparte en el reporte (su asistencia no se
+  pudo evaluar) en vez de contarlos silenciosamente como falta o como
+  presente.
+- **Reporte de Tardanzas y horas extra** (`/reports/hours`, módulo
+  "Tardanzas y horas extra"): por cada empleado y día, compara la primera
+  marcación contra la hora de ingreso (tardanza, en minutos) y la última
+  marcación contra la hora de salida del horario asignado (minutos
+  extra), y evalúa si el refrigerio se marcó y si se excedió del tiempo
+  esperado (con la misma tolerancia del horario). Solo lista días con
+  algo que revisar -- un día sin novedad no aparece, igual que "Faltas"
+  solo lista días con falta. Con export a Excel. Un horario creado antes
+  de que existiera "Hora de salida" no calcula horas extra hasta que se
+  vuelva a guardar desde `/schedules` (se avisa en pantalla).
 - Pantalla **Permisos** (solo super admin): elige, por módulo, si "Solo
   lectura" y "Administrador" pueden abrir Marcaciones, Exportar
   marcaciones, Dispositivos, Usuarios del dispositivo, Empleados y Sin
@@ -74,6 +155,43 @@ para el procedimiento completo de release.
 - Flujo de release versionado por tags de Git + GitHub Actions.
 
 ### Corregido
+- El campo de búsqueda de "Sin vincular" no tenía límite ni validaba
+  que fuera numérico -- se podía pegar/teclear una cadena larga de
+  dígitos (o de cualquier tipo de texto) sin ningún aviso claro de que
+  eso nunca iba a calzar con un DNI real. Ahora el campo se limita a
+  exactamente 8 dígitos (cualquier caracter que no sea número se
+  descarta al vuelo) y busca de forma exacta contra el DNI (código) del
+  maestro de Empleados -- ya no admite buscar por nombre libre, y
+  muestra "Faltan N dígito(s)" mientras se completa o "Ningún empleado
+  tiene ese DNI en el maestro" si no hay coincidencia.
+- Un usuario del reloj enrolado sin nombre (por huella/tarjeta, sin usar el
+  teclado del equipo) reportaba un nombre tipo "NN-77672037" -- eso lo
+  pone el propio reloj biométrico, no la aplicación, pero mostrarlo tal
+  cual en Marcaciones/Faltas/Tardanzas y sus exportes leía como un
+  nombre roto. Ahora se muestra como "ID 77672037" en esas pantallas
+  (igual que un nombre realmente vacío) hasta que se vincule a un
+  empleado real desde "Sin vincular" -- esa pantalla sigue mostrando el
+  "NN-xxxxx" tal cual a propósito, porque ahí el objetivo es ver
+  exactamente lo que reporta el reloj.
+- El buscador de Marcaciones ("Buscar: nombre o ID") solo comparaba
+  contra los campos crudos del reloj -- un empleado ya vinculado en
+  Empleados cuyo reloj todavía reportaba "NN-xxxxx" no aparecía al
+  buscar su nombre real, aunque el nombre real sí se mostrara en
+  pantalla. Ahora el filtro también compara contra el nombre del
+  empleado vinculado.
+- Lentitud del panel al ver/exportar Marcaciones: el nombre de cada
+  empleado se resolvía con una consulta a la base por cada marcación
+  cruda en vez de una sola consulta por lote -- con semanas de historial
+  (varias marcaciones por persona por día) esto era el verdadero cuello
+  de botella, no el motor de base de datos. También se agregaron índices
+  en `attendance_log.timestamp` y `employee_map.employee_id` (los
+  reportes ahora recorren rangos de fechas completos, no solo un
+  dispositivo+usuario a la vez) y se activó el modo WAL de SQLite para
+  que una sincronización en curso ya no bloquee la lectura del dashboard.
+  Con esto, SQLite bien indexado alcanza sin problema para el volumen
+  actual -- migrar a Postgres/MySQL (ya soportado hoy vía `DATABASE_URL`,
+  ver `central/db.py`) queda para si el volumen de marcaciones o la
+  cantidad de sedes/escrituras concurrentes crece mucho más adelante.
 - Editar un usuario del reloj desde el panel (aunque fuera solo para
   corregir el nombre) borraba en silencio su PIN local, porque
   `create_or_update_user` siempre mandaba `password=''` al dispositivo

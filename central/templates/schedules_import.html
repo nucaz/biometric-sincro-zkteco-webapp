@@ -1,0 +1,21 @@
+{% extends "base.html" %}
+{% block title %}Importar horarios{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0;">Asignar horarios desde Excel</h2>
+  <a class="btn secondary" href="{{ url_for('schedules_import_template') }}">Descargar plantilla</a>
+</div>
+<div class="device-card" style="max-width:560px;">
+  <p class="muted">El archivo debe tener una primera fila con encabezados (sin distinguir mayúsculas):</p>
+  <ul class="muted">
+    <li><strong>codigo</strong> (obligatoria): debe coincidir con el "Código" del empleado en el maestro de <a href="{{ url_for('employees_list') }}">Empleados</a>.</li>
+    <li><strong>horario</strong> (obligatoria): debe coincidir EXACTAMENTE con el nombre de un horario ya creado en <a href="{{ url_for('schedules_list') }}">Horarios</a>.</li>
+    <li><strong>vigente_desde</strong> (opcional): fecha AAAA-MM-DD desde la que aplica. Si se omite, se usa hoy.</li>
+  </ul>
+  <p class="muted">Cada fila reemplaza la vigencia actual del empleado por el horario nuevo (cierra la anterior automáticamente, igual que asignarlo a mano desde su ficha). Filas con un código, horario o fecha que no se reconozcan se reportan como error sin detener el resto del archivo.</p>
+  <form method="post" enctype="multipart/form-data">
+    <input type="file" name="xlsx_file" accept=".xlsx" required style="margin-bottom:10px;">
+    <button type="submit">Importar</button>
+  </form>
+</div>
+{% endblock %}

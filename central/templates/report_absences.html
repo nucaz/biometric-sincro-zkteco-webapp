@@ -1,0 +1,50 @@
+{% extends "base.html" %}
+{% block title %}Reporte de faltas{% endblock %}
+{% block content %}
+<form class="filters" method="get">
+  <label>Desde
+    <input type="date" name="start" value="{{ start }}">
+  </label>
+  <label>Hasta
+    <input type="date" name="end" value="{{ end }}">
+  </label>
+  <label>Sede
+    <select name="sede">
+      <option value="">Todas</option>
+      {% for s in sedes %}
+        <option value="{{ s }}" {{ 'selected' if sede == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <label>Mostrar con N° de faltas ≥
+    <input type="number" name="min_faltas" min="1" value="{{ min_faltas }}" style="width:70px;">
+  </label>
+  <button type="submit">Filtrar</button>
+  <a class="btn" href="{{ url_for('report_absences_export', start=start, end=end, sede=sede or '', min_faltas=min_faltas) }}">Exportar Excel</a>
+</form>
+
+<p class="muted">Para "¿quién no marcó hoy?" deja Desde y Hasta en la fecha de hoy con mínimo 1. Para ausentismo repetido, amplía el rango y sube el mínimo (ej. 2 para ver quién faltó más de una vez). Un día cuenta como falta solo si el horario asignado al empleado lo marca como día laborable ese día -- descansos, vacaciones o permisos no se incluyen aquí.</p>
+
+{% if no_schedule %}
+<div class="flash" style="background:#fee2e2; border-color:#dc2626;">
+  <strong>{{ no_schedule|length }} empleado(s) activo(s) sin horario asignado</strong> en parte o todo el rango -- no se pudo evaluar su asistencia esos días: {{ no_schedule|map(attribute='full_name')|join(', ') }}.
+  {% if can_manage %}Asígnales un horario desde <a href="{{ url_for('employees_list') }}">Empleados</a>.{% endif %}
+</div>
+{% endif %}
+
+<table>
+  <thead><tr><th>Código</th><th>Empleado</th><th>N° de faltas</th><th>Fechas</th></tr></thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.employee.code or '-' }}</td>
+      <td>{{ r.employee.full_name }}</td>
+      <td>{{ r.faltas }}</td>
+      <td class="muted">{{ r.fechas }}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="4" class="muted">Nadie superó el mínimo de faltas en este rango.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

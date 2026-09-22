@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block title %}Vacaciones y permisos{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0;">Vacaciones, permisos y descansos médicos</h2>
+  {% if can_manage %}
+  <a class="btn" href="{{ url_for('exception_new') }}">+ Agregar</a>
+  {% endif %}
+</div>
+<p class="muted">Un día dentro de un rango registrado aquí no cuenta como falta en el reporte de faltas -- aparece como "Justificado" en vez de "Falta".</p>
+
+<form class="filters" method="get">
+  <label>Empleado
+    <select name="employee_id" onchange="this.form.submit()">
+      <option value="">Todos</option>
+      {% for e in employees %}
+      <option value="{{ e.id }}" {{ 'selected' if employee_id == e.id }}>{{ e.full_name }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<table>
+  <thead><tr><th>Empleado</th><th>Tipo</th><th>Desde</th><th>Hasta</th><th>Nota</th>{% if can_manage %}<th></th>{% endif %}</tr></thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.employee.full_name }}</td>
+      <td>{{ kind_labels.get(r.kind, r.kind) }}</td>
+      <td>{{ r.date_from.strftime('%Y-%m-%d') }}</td>
+      <td>{{ r.date_to.strftime('%Y-%m-%d') }}</td>
+      <td class="muted">{{ r.note or '-' }}</td>
+      {% if can_manage %}
+      <td>
+        <form class="inline-form" method="post" action="{{ url_for('exception_delete', exception_id=r.id) }}" onsubmit="return confirm('¿Eliminar este registro?');">
+          <button type="submit" class="btn danger">Eliminar</button>
+        </form>
+      </td>
+      {% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 6 if can_manage else 5 }}" class="muted">Sin registros todavía.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

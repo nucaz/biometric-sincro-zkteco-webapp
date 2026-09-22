@@ -61,4 +61,6 @@ venv.bak/
 *.log
 devices.json
 central/attendance.db
-*.db 
+*.db
+*.db-shm
+*.db-wal 

@@ -1,0 +1,61 @@
+{% extends "base.html" %}
+{% block title %}Panel{% endblock %}
+{% block content %}
+<form class="filters" method="get">
+  <label>Sede
+    <select name="sede" onchange="this.form.submit()">
+      <option value="">Todas</option>
+      {% for s in sedes %}
+        <option value="{{ s }}" {{ 'selected' if sede == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+</form>
+
+<p class="muted">Estado de hoy ({{ today }}) para {{ total_employees }} empleado(s) activo(s){% if sede %} en {{ sede }}{% endif %}.</p>
+
+<div class="card-grid">
+  <div class="device-card">
+    <p class="kpi-value">{{ counts.a_tiempo + counts.tardanza }}</p>
+    <p class="muted">Presentes hoy</p>
+  </div>
+  <div class="device-card">
+    <p class="kpi-value" style="color:#b45309;">{{ counts.tardanza }}</p>
+    <p class="muted">Tardanzas hoy</p>
+  </div>
+  <div class="device-card">
+    <p class="kpi-value" style="color:#b91c1c;">{{ counts.falta }}</p>
+    <p class="muted">Faltas hoy</p>
+  </div>
+  <div class="device-card">
+    <p class="kpi-value">{{ counts.justificado }}</p>
+    <p class="muted">Justificados hoy (vacaciones/permiso/descanso médico)</p>
+  </div>
+  <div class="device-card">
+    <p class="kpi-value">{{ counts.descanso }}</p>
+    <p class="muted">En descanso hoy (no laborable)</p>
+  </div>
+  {% if counts.sin_horario %}
+  <div class="device-card" style="border:1px solid #dc2626;">
+    <p class="kpi-value" style="color:#b91c1c;">{{ counts.sin_horario }}</p>
+    <p class="muted">Sin horario asignado -- <a href="{{ url_for('employees_list') }}">revisar</a></p>
+  </div>
+  {% endif %}
+</div>
+
+<h2 style="margin-top:32px;">Ausentismo repetido (últimos 30 días, desde {{ window_start }})</h2>
+<p class="muted">Empleados con 2 o más faltas en este período. Para el detalle día por día, o para cambiar el rango, ve a <a href="{{ url_for('report_absences') }}">Reporte de faltas</a>.</p>
+<table>
+  <thead><tr><th>Empleado</th><th>N° de faltas</th></tr></thead>
+  <tbody>
+    {% for employee, n in top_ausentismo %}
+    <tr>
+      <td>{{ employee.full_name }}</td>
+      <td><span class="badge warn">{{ n }}</span></td>
+    </tr>
+    {% else %}
+    <tr><td colspan="2" class="muted">Nadie acumula 2 o más faltas en este período.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

@@ -1,0 +1,41 @@
+{% extends "base.html" %}
+{% block title %}Horarios{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0;">Maestro de horarios</h2>
+  {% if can_manage %}
+  <div style="display:flex; gap:8px;">
+    <a class="btn secondary" href="{{ url_for('schedules_import') }}">Asignar desde Excel</a>
+    <a class="btn" href="{{ url_for('schedule_new') }}">+ Agregar horario</a>
+  </div>
+  {% endif %}
+</div>
+<table>
+  <thead>
+    <tr>
+      <th>Nombre</th><th>Ingreso</th><th>Salida</th><th>Tolerancia</th><th>Refrigerio</th><th>Días laborables</th><th>Estado</th>
+      {% if can_manage %}<th></th>{% endif %}
+    </tr>
+  </thead>
+  <tbody>
+    {% for s in schedules %}
+    <tr>
+      <td>{{ s.name }}</td>
+      <td>{{ s.entry_time.strftime('%H:%M') }}</td>
+      <td>{% if s.exit_time %}{{ s.exit_time.strftime('%H:%M') }}{% else %}<span class="badge warn">Sin definir</span>{% endif %}</td>
+      <td>{{ s.tolerance_minutes }} min</td>
+      <td>{% if s.lunch_start and s.lunch_end %}{{ s.lunch_start.strftime('%H:%M') }} - {{ s.lunch_end.strftime('%H:%M') }}{% else %}<span class="muted">No aplica</span>{% endif %}</td>
+      <td>
+        {% for field, label in weekday_fields %}
+          {% if s[field] %}<span class="badge">{{ label[:2] }}</span>{% endif %}
+        {% endfor %}
+      </td>
+      <td>{% if s.active %}Activo{% else %}<span class="badge warn">Inactivo</span>{% endif %}</td>
+      {% if can_manage %}<td><a class="btn secondary" href="{{ url_for('schedule_edit', schedule_id=s.id) }}">Editar</a></td>{% endif %}
+    </tr>
+    {% else %}
+    <tr><td colspan="{{ 8 if can_manage else 7 }}" class="muted">Sin horarios registrados todavía.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

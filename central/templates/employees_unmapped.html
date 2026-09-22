@@ -22,17 +22,20 @@
           <button type="submit">Vincular</button>
         </form>
         {% else %}
-        <form class="inline-form" method="post" action="{{ url_for('employee_map_create') }}" style="display:flex; gap:6px;">
+        <form class="inline-form link-form" method="post" action="{{ url_for('employee_map_create') }}" style="display:flex; gap:6px; align-items:start; flex-wrap:wrap;">
           <input type="hidden" name="device_pk" value="{{ r.device_pk }}">
           <input type="hidden" name="device_user_id" value="{{ r.device_user_id }}">
-          <select name="employee_id" style="max-width:160px;" title="Deja en '— nuevo empleado —' solo si esta persona no existe todavía en el maestro">
-            <option value="">— nuevo empleado —</option>
-            {% for e in employees %}
-              <option value="{{ e.id }}">{{ e.full_name }}{% if e.code %} ({{ e.code }}){% endif %}</option>
-            {% endfor %}
-          </select>
-          <input type="text" name="new_employee_name" placeholder="Nombre si es nuevo" style="max-width:160px;">
-          <button type="submit">Vincular</button>
+          <input type="hidden" name="employee_id" class="employee-search-id" value="">
+          <span style="display:flex; flex-direction:column; gap:2px;">
+            <input
+              type="text" list="employees-datalist" class="employee-search"
+              inputmode="numeric" pattern="[0-9]{8}" maxlength="8"
+              placeholder="DNI (8 dígitos)" autocomplete="off"
+              oninput="onEmployeeSearchInput(this)" style="max-width:150px;">
+            <span class="employee-search-status muted" style="font-size:11px; min-height:14px;"></span>
+          </span>
+          <input type="text" name="new_employee_name" class="new-name-input" placeholder="Nombre si es nuevo" style="max-width:150px;" oninput="onNewNameInput(this)">
+          <button type="submit" disabled title="Escribe el DNI completo (8 dígitos) de un empleado ya existente, o escribe un nombre nuevo">Vincular</button>
         </form>
         {% endif %}
         {% else %}
@@ -45,4 +48,67 @@
     {% endfor %}
   </tbody>
 </table>
+
+<datalist id="employees-datalist">
+  {% for e in employees if e.code %}
+  <option value="{{ e.code }}" label="{{ e.full_name }}">
+  {% endfor %}
+</datalist>
+
+<script>
+  // Keyed by DNI (Employee.code) -- ONLY employees that actually have one
+  // on file show up here at all, since this screen now looks someone up
+  // strictly by their 8-digit DNI against the Empleados master, never by
+  // typing a free-text name (that used to let a long paste or a partial
+  // name silently sit there with no real match). An employee without a
+  // DNI on file has to get one in Empleados before they can be linked
+  // from here -- the "Nombre si es nuevo" field is still there for a
+  // genuinely new person.
+  const EMPLOYEES_BY_DNI = {
+    {% for e in employees if e.code %}
+    {{ e.code | tojson }}: { id: {{ e.id }}, name: {{ e.full_name | tojson }} }{{ ',' if not loop.last }}
+    {% endfor %}
+  };
+
+  function refreshLinkButton(form) {
+    const hiddenId = form.querySelector('.employee-search-id');
+    const newName = form.querySelector('.new-name-input');
+    const btn = form.querySelector('button[type=submit]');
+    btn.disabled = !(hiddenId.value || (newName && newName.value.trim()));
+  }
+
+  function onEmployeeSearchInput(input) {
+    // Strip anything that isn't a digit and cap at 8 -- blocks a paste
+    // (browser autofill, or gluing two DNIs together) from ever sitting
+    // in the field instead of just being rejected on submit.
+    const digits = input.value.replace(/\D/g, '').slice(0, 8);
+    if (digits !== input.value) input.value = digits;
+
+    const form = input.closest('form');
+    const hiddenId = form.querySelector('.employee-search-id');
+    const status = form.querySelector('.employee-search-status');
+    const match = digits.length === 8 ? EMPLOYEES_BY_DNI[digits] : null;
+    if (match) {
+      hiddenId.value = match.id;
+      status.textContent = '✓ ' + match.name;
+      status.style.color = '#166534';
+    } else {
+      hiddenId.value = '';
+      if (digits.length === 0) {
+        status.textContent = '';
+      } else if (digits.length < 8) {
+        status.textContent = `Faltan ${8 - digits.length} dígito(s)`;
+        status.style.color = '#6b7280';
+      } else {
+        status.textContent = 'Ningún empleado tiene ese DNI en el maestro';
+        status.style.color = '#991b1b';
+      }
+    }
+    refreshLinkButton(form);
+  }
+
+  function onNewNameInput(input) {
+    refreshLinkButton(input.closest('form'));
+  }
+</script>
 {% endblock %}

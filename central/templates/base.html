@@ -3,13 +3,25 @@
 <head>
 <meta charset="utf-8">
 <title>{% block title %}Asistencia{% endblock %}</title>
+<script>
+  // Runs before the sidebar paints so a collapsed/resized state from a
+  // previous page doesn't flash open at full width first -- every page
+  // here is a full server round-trip (no client-side routing), so this
+  // has to re-run and re-apply on every single load.
+  (function () {
+    try {
+      if (localStorage.getItem('sidebarCollapsed') === '1') {
+        document.documentElement.classList.add('sidebar-collapsed');
+      }
+      var w = localStorage.getItem('sidebarWidth');
+      if (w) document.documentElement.style.setProperty('--sidebar-width', w + 'px');
+    } catch (e) { /* localStorage blocked (private window, etc.) -- default width/expanded is fine */ }
+  })();
+</script>
 <style>
-  :root { color-scheme: light; }
+  :root { color-scheme: light; --sidebar-width: 240px; }
+  * { box-sizing: border-box; }
   body { font-family: Segoe UI, Arial, sans-serif; margin: 0; background: #f4f5f7; color: #1a1a1a; }
-  header { background: #1f2937; color: #fff; padding: 12px 24px; display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 8px 0; }
-  nav { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 16px; }
-  header a { color: #fff; text-decoration: none; font-size: 14px; white-space: nowrap; }
-  main { padding: 24px; max-width: 1200px; margin: 0 auto; }
   table { width: 100%; border-collapse: collapse; background: #fff; box-shadow: 0 1px 3px rgba(0,0,0,.1); }
   th, td { padding: 8px 12px; border-bottom: 1px solid #e5e7eb; text-align: left; font-size: 14px; }
   th { background: #f9fafb; position: sticky; top: 0; }
@@ -32,12 +44,13 @@
   .badge.warn { background: #fee2e2; color: #991b1b; }
   .badge.role { background: #dbeafe; color: #1e40af; }
   .inline-form { display: inline; }
-  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 16px; }
+  .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 16px; margin-bottom: 8px; }
   .device-card { background: #fff; border-radius: 8px; box-shadow: 0 1px 3px rgba(0,0,0,.1); padding: 16px; display: flex; flex-direction: column; gap: 10px; }
   .device-card h3 { margin: 0; font-size: 16px; display: flex; align-items: center; gap: 8px; }
   .device-card .meta { font-size: 13px; color: #4b5563; display: grid; grid-template-columns: auto 1fr; gap: 2px 10px; }
   .device-card .meta dt { color: #9ca3af; }
   .device-card .meta dd { margin: 0; }
+  .kpi-value { margin: 0; font-size: 28px; font-weight: 600; }
   .btn-group { display: flex; flex-wrap: wrap; gap: 6px; }
   .btn-group form { margin: 0; }
   .btn-group .btn, .btn-group button { font-size: 13px; padding: 6px 10px; }
@@ -45,36 +58,153 @@
   .status-dot.ok { background: #16a34a; }
   .status-dot.bad { background: #dc2626; }
   footer.app-footer { text-align: center; padding: 24px 12px; color: #9ca3af; font-size: 12px; }
+
+  /* ---- app shell / sidebar --------------------------------------- */
+  .app-shell { display: flex; align-items: stretch; min-height: 100vh; }
+  .sidebar {
+    width: var(--sidebar-width); flex-shrink: 0; position: sticky; top: 0; height: 100vh;
+    background: #111827; color: #d1d5db; display: flex; flex-direction: column;
+    /* NOT overflow:hidden here -- the resizer handle below deliberately
+       sticks out 3px past this box's own right edge so it's easy to grab,
+       and overflow:hidden on this element would clip it out of the
+       hit-testing area, making it silently undraggable. Labels that would
+       overflow at a very narrow width are clipped per-nav-item instead. */
+  }
+  html.sidebar-collapsed .sidebar { width: 0; }
+  .sidebar-brand { display: flex; align-items: center; gap: 10px; padding: 18px 16px; white-space: nowrap; overflow: hidden; border-bottom: 1px solid rgba(255,255,255,.08); }
+  .sidebar-brand strong { color: #fff; font-size: 15px; }
+  .sidebar-nav { flex: 1; overflow-y: auto; overflow-x: hidden; padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .nav-section-label { margin: 14px 12px 4px; font-size: 11px; letter-spacing: .06em; text-transform: uppercase; color: #6b7280; white-space: nowrap; }
+  .nav-item {
+    display: flex; align-items: center; gap: 12px; padding: 9px 12px; border-radius: 6px;
+    color: #cbd5e1; text-decoration: none; font-size: 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+    border: none; background: none; width: 100%; text-align: left; cursor: pointer; font-family: inherit;
+  }
+  .nav-item:hover { background: rgba(255,255,255,.07); color: #fff; }
+  .nav-item.active { background: #2563eb; color: #fff; }
+  .nav-icon { width: 18px; height: 18px; flex-shrink: 0; }
+  .sidebar-footer { border-top: 1px solid rgba(255,255,255,.08); padding: 10px 8px; display: flex; flex-direction: column; gap: 2px; }
+  .sidebar-user { display: flex; flex-direction: column; gap: 4px; padding: 8px 12px; }
+  .sidebar-username { color: #9ca3af; font-size: 12px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .sidebar-resizer { position: absolute; top: 0; right: -3px; width: 6px; height: 100%; cursor: col-resize; z-index: 5; }
+  html.sidebar-collapsed .sidebar-resizer { display: none; }
+  .sidebar-expand-btn {
+    display: none; position: fixed; top: 14px; left: 14px; z-index: 20;
+    background: #111827; color: #fff; border: none; border-radius: 6px; padding: 8px; cursor: pointer;
+  }
+  .sidebar-expand-btn svg { width: 18px; height: 18px; display: block; }
+  html.sidebar-collapsed .sidebar-expand-btn { display: flex; }
+  .app-main { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  main { padding: 24px; max-width: 1400px; width: 100%; margin: 0 auto; }
+  html.sidebar-collapsed main { padding-left: 56px; }
 </style>
 </head>
 <body>
-<header>
-  <strong>Asistencia - Panel RRHH</strong>
-  <nav>
-    {% if module_enabled('dashboard') %}<a href="{{ url_for('dashboard') }}">Marcaciones</a>{% endif %}
-    {% if module_enabled('devices') %}<a href="{{ url_for('devices_status') }}">Dispositivos</a>{% endif %}
-    {% if module_enabled('employees') %}<a href="{{ url_for('employees_list') }}">Empleados</a>{% endif %}
-    {% if module_enabled('employees_unmapped') %}<a href="{{ url_for('employees_unmapped') }}">Sin vincular</a>{% endif %}
-    {% if is_super_admin %}
-    <a href="{{ url_for('users_list') }}">Cuentas</a>
-    <a href="{{ url_for('backup_page') }}">Backup</a>
-    <a href="{{ url_for('audit_log') }}">Auditoría</a>
-    <a href="{{ url_for('permissions_page') }}">Permisos</a>
-    {% endif %}
-    <a href="{{ url_for('account_security') }}">Seguridad</a>
-    <span class="badge role">{{ current_role_label }}</span>
-    <span class="muted" style="color:#9ca3af;">{{ current_username }}</span>
-    <a href="{{ url_for('logout') }}">Salir</a>
-  </nav>
-</header>
-<main>
-  {% with messages = get_flashed_messages() %}
-    {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
-  {% endwith %}
-  {% block content %}{% endblock %}
-</main>
-<footer class="app-footer">
-  Develop Juan Carlos Aguirre Alvarado — Infraestructura TI &amp; Ciberseguridad Apps
-</footer>
+<div class="app-shell">
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-brand"><strong>Asistencia - Panel RRHH</strong></div>
+    <nav class="sidebar-nav">
+      {% set schedule_endpoints = ['schedules_list', 'schedule_new', 'schedule_edit', 'schedules_import'] %}
+      {% set employees_endpoints = ['employees_list', 'employee_new', 'employee_edit', 'employees_import'] %}
+      {% set exceptions_endpoints = ['exceptions_list', 'exception_new'] %}
+      {% if module_enabled('reports_overview') %}
+      <a class="nav-item {{ 'active' if active_endpoint == 'reports_overview' }}" href="{{ url_for('reports_overview') }}">{{ icon('grid') }}<span class="nav-label">Panel</span></a>
+      {% endif %}
+      {% if module_enabled('dashboard') %}
+      <a class="nav-item {{ 'active' if active_endpoint == 'dashboard' }}" href="{{ url_for('dashboard') }}">{{ icon('clock') }}<span class="nav-label">Marcaciones</span></a>
+      {% endif %}
+      {% if module_enabled('reports_absences') %}
+      <a class="nav-item {{ 'active' if active_endpoint in ['report_absences', 'report_absences_export'] }}" href="{{ url_for('report_absences') }}">{{ icon('alert-circle') }}<span class="nav-label">Faltas</span></a>
+      {% endif %}
+      {% if module_enabled('reports_hours') %}
+      <a class="nav-item {{ 'active' if active_endpoint in ['report_hours', 'report_hours_export'] }}" href="{{ url_for('report_hours') }}">{{ icon('trending-up') }}<span class="nav-label">Tardanzas</span></a>
+      {% endif %}
+      {% if module_enabled('devices') %}
+      <a class="nav-item {{ 'active' if active_endpoint == 'devices_status' }}" href="{{ url_for('devices_status') }}">{{ icon('server') }}<span class="nav-label">Dispositivos</span></a>
+      {% endif %}
+      {% if module_enabled('employees') %}
+      <a class="nav-item {{ 'active' if active_endpoint in employees_endpoints }}" href="{{ url_for('employees_list') }}">{{ icon('users') }}<span class="nav-label">Empleados</span></a>
+      {% endif %}
+      {% if module_enabled('employees_unmapped') %}
+      <a class="nav-item {{ 'active' if active_endpoint == 'employees_unmapped' }}" href="{{ url_for('employees_unmapped') }}">{{ icon('user-plus') }}<span class="nav-label">Sin vincular</span></a>
+      {% endif %}
+      {% if module_enabled('schedules') %}
+      <a class="nav-item {{ 'active' if active_endpoint in schedule_endpoints }}" href="{{ url_for('schedules_list') }}">{{ icon('calendar') }}<span class="nav-label">Horarios</span></a>
+      {% endif %}
+      {% if module_enabled('attendance_exceptions') %}
+      <a class="nav-item {{ 'active' if active_endpoint in exceptions_endpoints }}" href="{{ url_for('exceptions_list') }}">{{ icon('calendar-minus') }}<span class="nav-label">Vacaciones/permisos</span></a>
+      {% endif %}
+      {% if is_super_admin %}
+      <div class="nav-section-label">Administración</div>
+      <a class="nav-item {{ 'active' if active_endpoint == 'users_list' }}" href="{{ url_for('users_list') }}">{{ icon('key') }}<span class="nav-label">Cuentas</span></a>
+      <a class="nav-item {{ 'active' if active_endpoint == 'backup_page' }}" href="{{ url_for('backup_page') }}">{{ icon('database') }}<span class="nav-label">Backup</span></a>
+      <a class="nav-item {{ 'active' if active_endpoint == 'audit_log' }}" href="{{ url_for('audit_log') }}">{{ icon('file-text') }}<span class="nav-label">Auditoría</span></a>
+      <a class="nav-item {{ 'active' if active_endpoint == 'permissions_page' }}" href="{{ url_for('permissions_page') }}">{{ icon('shield') }}<span class="nav-label">Permisos</span></a>
+      {% endif %}
+    </nav>
+    <div class="sidebar-footer">
+      <a class="nav-item {{ 'active' if active_endpoint == 'account_security' }}" href="{{ url_for('account_security') }}">{{ icon('lock') }}<span class="nav-label">Seguridad</span></a>
+      <div class="sidebar-user">
+        <span class="badge role">{{ current_role_label }}</span>
+        <span class="sidebar-username">{{ current_username }}</span>
+      </div>
+      <a class="nav-item" href="{{ url_for('logout') }}">{{ icon('log-out') }}<span class="nav-label">Salir</span></a>
+      <button type="button" class="nav-item" id="sidebarCollapseBtn">{{ icon('chevrons-left') }}<span class="nav-label">Colapsar</span></button>
+    </div>
+    <div class="sidebar-resizer" id="sidebarResizer" title="Arrastra para cambiar el ancho"></div>
+  </aside>
+
+  <button type="button" class="sidebar-expand-btn" id="sidebarExpandBtn" title="Mostrar menú" aria-label="Mostrar menú">{{ icon('menu') }}</button>
+
+  <div class="app-main">
+    <main>
+      {% with messages = get_flashed_messages() %}
+        {% if messages %}{% for m in messages %}<div class="flash">{{ m }}</div>{% endfor %}{% endif %}
+      {% endwith %}
+      {% block content %}{% endblock %}
+    </main>
+    <footer class="app-footer">
+      Develop Juan Carlos Aguirre Alvarado — Infraestructura TI &amp; Ciberseguridad Apps
+    </footer>
+  </div>
+</div>
+<script>
+  (function () {
+    var root = document.documentElement;
+    var sidebar = document.getElementById('sidebar');
+    var collapseBtn = document.getElementById('sidebarCollapseBtn');
+    var expandBtn = document.getElementById('sidebarExpandBtn');
+    var resizer = document.getElementById('sidebarResizer');
+    var MIN_WIDTH = 180, MAX_WIDTH = 420;
+
+    function setCollapsed(collapsed) {
+      root.classList.toggle('sidebar-collapsed', collapsed);
+      try { localStorage.setItem('sidebarCollapsed', collapsed ? '1' : '0'); } catch (e) {}
+    }
+    if (collapseBtn) collapseBtn.addEventListener('click', function () { setCollapsed(true); });
+    if (expandBtn) expandBtn.addEventListener('click', function () { setCollapsed(false); });
+
+    if (resizer && sidebar) {
+      var dragging = false;
+      resizer.addEventListener('mousedown', function (e) {
+        dragging = true;
+        document.body.style.userSelect = 'none';
+        e.preventDefault();
+      });
+      window.addEventListener('mousemove', function (e) {
+        if (!dragging) return;
+        var w = Math.min(MAX_WIDTH, Math.max(MIN_WIDTH, e.clientX));
+        root.style.setProperty('--sidebar-width', w + 'px');
+      });
+      window.addEventListener('mouseup', function () {
+        if (!dragging) return;
+        dragging = false;
+        document.body.style.userSelect = '';
+        var w = parseInt(getComputedStyle(root).getPropertyValue('--sidebar-width'), 10);
+        try { localStorage.setItem('sidebarWidth', w); } catch (e) {}
+      });
+    }
+  })();
+</script>
 </body>
 </html>

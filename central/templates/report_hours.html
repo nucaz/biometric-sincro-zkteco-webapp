@@ -1,0 +1,53 @@
+{% extends "base.html" %}
+{% block title %}Tardanzas y horas extra{% endblock %}
+{% block content %}
+<form class="filters" method="get">
+  <label>Desde
+    <input type="date" name="start" value="{{ start }}">
+  </label>
+  <label>Hasta
+    <input type="date" name="end" value="{{ end }}">
+  </label>
+  <label>Sede
+    <select name="sede">
+      <option value="">Todas</option>
+      {% for s in sedes %}
+        <option value="{{ s }}" {{ 'selected' if sede == s }}>{{ s }}</option>
+      {% endfor %}
+    </select>
+  </label>
+  <button type="submit">Filtrar</button>
+  <a class="btn" href="{{ url_for('report_hours_export', start=start, end=end, sede=sede or '') }}">Exportar Excel</a>
+</form>
+
+<p class="muted">Solo se listan días con algo que revisar: tardanza, minutos extra después de la hora de salida, o refrigerio no marcado/excedido. Un día normal sin novedad no aparece aquí. "Min. extra" solo se calcula en horarios que ya tienen Hora de salida configurada (ver <a href="{{ url_for('schedules_list') }}">Horarios</a>).</p>
+
+<table>
+  <thead>
+    <tr>
+      <th>Empleado</th><th>Fecha</th><th>Horario</th>
+      <th>Ingreso esperado</th><th>Marcó</th><th>Min. tarde</th>
+      <th>Salida esperada</th><th>Marcó</th><th>Min. extra</th>
+      <th>Refrigerio</th>
+    </tr>
+  </thead>
+  <tbody>
+    {% for r in rows %}
+    <tr>
+      <td>{{ r.employee.full_name }}</td>
+      <td>{{ r.date.strftime('%Y-%m-%d') }}</td>
+      <td>{{ r.schedule_name or '-' }}</td>
+      <td>{{ r.expected_entry.strftime('%H:%M') if r.expected_entry else '-' }}</td>
+      <td>{{ r.first_punch.strftime('%H:%M:%S') if r.first_punch else '-' }}</td>
+      <td>{% if r.minutes_late %}<span class="badge warn">+{{ r.minutes_late }} min</span>{% else %}-{% endif %}</td>
+      <td>{{ r.expected_exit.strftime('%H:%M') if r.expected_exit else '-' }}</td>
+      <td>{{ r.last_punch.strftime('%H:%M:%S') if r.last_punch else '-' }}</td>
+      <td>{% if r.overtime_minutes %}<span class="badge">+{{ r.overtime_minutes }} min</span>{% else %}-{% endif %}</td>
+      <td>{% if r.lunch_status == 'excedido' %}<span class="badge warn">Excedido ({{ r.lunch_minutes }} min)</span>{% elif r.lunch_status == 'no_marcado' %}<span class="badge warn">No marcado</span>{% else %}-{% endif %}</td>
+    </tr>
+    {% else %}
+    <tr><td colspan="10" class="muted">Nada que revisar en este rango.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}
