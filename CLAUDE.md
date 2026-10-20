@@ -572,6 +572,43 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     migración) y confirmando que el `robocopy` lo trae y que el módulo
     importa después -- sin volver a instalar PostgreSQL para esto, ya
     que es un problema de archivos, no de conexión a la base.
+  - **Bug real #3, mismo usuario, mismo servidor, siguiente intento**:
+    había vuelto a correr el script contra un PostgreSQL que YA tenía el
+    usuario/base de la vez anterior. El script detectaba bien que el
+    usuario ya existía ("se deja igual") pero NO actualizaba su
+    contraseña en PostgreSQL -- mientras tanto, como el usuario dejó el
+    campo de contraseña vacío (Enter) otra vez, `New-RandomSecret`
+    generó una contraseña NUEVA y DISTINTA, que el script igual usó para
+    armar el `DATABASE_URL`. Nunca iban a coincidir. El síntoma no fue
+    un claro "contraseña incorrecta": psycopg2 reventó con
+    `UnicodeDecodeError: 'utf-8' codec can't decode byte 0xf3...` --
+    PostgreSQL le mandó el mensaje de autenticación fallida en español
+    (con una "ó", byte `0xF3` en Windows-1252/Latin-1) y psycopg2 asumió
+    UTF-8 al decodificarlo, mismo tipo de problema de idioma/codificación
+    que el bug de `ALTER`/`CREATE` ya documentado arriba, pero esta vez
+    del lado de libpq, no de un `-match` de PowerShell. Arreglado:
+    cuando el usuario YA existe, el script ahora corre `ALTER USER ...
+    WITH PASSWORD` con la contraseña que se acaba de ingresar/generar en
+    ESTA corrida, en vez de dejarla sin tocar -- así `$PgPassword`
+    (lo que arma el `DATABASE_URL`) SIEMPRE coincide con lo que de
+    verdad quedó en PostgreSQL, sea la primera vez o la enésima. De
+    paso se endureció el `pip install` (ruta absoluta al
+    `requirements.txt` en vez de una relativa al directorio de trabajo
+    del proceso -- esa parte SÍ fallaba en la sesión elevada real del
+    usuario con "No such file or directory", aunque no en las pruebas
+    de esta sesión con una consola no elevada; más seguro no depender
+    de la propagación del cwd a un proceso hijo en absoluto) y se agregó
+    verificación de `$LASTEXITCODE` ahí, que antes fallaba en silencio y
+    seguía adelante. Verificado reproduciendo el escenario EXACTO:
+    PostgreSQL 17 real, primera corrida crea el usuario con una
+    contraseña, segunda corrida con una contraseña DISTINTA -- confirmó
+    el mensaje de "actualizando su contraseña", conexión real exitosa
+    (llegó hasta `Creando el esquema en el destino`, sin el
+    `UnicodeDecodeError`), y recién ahí el bloqueo esperado y correcto
+    de "el destino ya tiene datos" (por no pasar `--force`, ya que el
+    destino tenía los datos de la corrida anterior) -- la señal de que
+    la conexión en sí quedó perfecta, el único motivo de parada fue la
+    protección contra duplicar datos, que es el comportamiento correcto.
 
 ## Estado actual / pendientes
 
@@ -724,17 +761,19 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   Files\PostgreSQL\17` en esta PC de dev (residuo del desinstalador de
   PostgreSQL, un bloqueo de seguridad de la herramienta impidió
   borrarla) -- inofensiva, el usuario la puede borrar cuando quiera.
-- **2026-10-21: usuario corrió `migrar_a_postgresql.ps1` de verdad
-  contra su servidor y encontró el bug real #2** documentado arriba en
-  "Arquitectura y decisiones clave" (faltaba actualizar `C:\Asistencia`
-  con el código nuevo antes de migrar) -- corregido con `robocopy` +
-  `pip install` antes del intento de migración, verificado reproduciendo
-  el error exacto en una carpeta de prueba. **Todavía sin confirmar**:
-  si el usuario ya volvió a correr el script con el fix y le funcionó de
-  punta a punta en su servidor real -- la vez anterior se detuvo justo
-  en este error, antes de tocar ningún dato (el respaldo del SQLite ya
-  se había hecho y quedó a salvo). **Sin commitear** (sin pedir commit
-  todavía).
+- **2026-10-21: usuario corriendo `migrar_a_postgresql.ps1` de verdad
+  contra su servidor, dos rondas de bugs reales encontrados y
+  corregidos** -- ver el detalle completo de ambos en "Arquitectura y
+  decisiones clave" arriba (bug #2: `C:\Asistencia` con código viejo,
+  ya commiteado en `a2fd09f`; bug #3: contraseña de PostgreSQL
+  desincronizada en una segunda corrida, causaba un `UnicodeDecodeError`
+  confuso en vez de un claro error de autenticación -- este todavía SIN
+  commitear). **Todavía sin confirmar**: que el usuario haya corrido el
+  script con el fix del bug #3 de punta a punta en su servidor real y
+  le haya dejado el panel andando contra PostgreSQL -- cada intento
+  hasta ahora se detuvo ANTES de tocar datos (el respaldo del SQLite
+  real sigue a salvo en `C:\Asistencia\backups\`, el panel nativo sigue
+  ahí sin tocar, nada se perdió en ningún intento).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

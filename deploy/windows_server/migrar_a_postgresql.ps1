@@ -158,7 +158,17 @@ function Test-PgDatabaseExists([string]$DbName) {
 
 Write-Host "`nCreando usuario y base de datos en PostgreSQL (si no existen)..." -ForegroundColor Cyan
 if (Test-PgRoleExists $PgUser) {
-    Write-Host "  Usuario '$PgUser' ya existe -- se deja igual (no se toca su contraseña)." -ForegroundColor DarkGray
+    # Sincroniza la contraseña real en PostgreSQL con la que se acaba de
+    # ingresar/generar en ESTA corrida -- si se dejara la existente sin
+    # tocar, $PgPassword (lo que se usa más abajo para armar el
+    # DATABASE_URL) casi nunca iba a coincidir con la de una corrida
+    # anterior, y la conexión fallaba por contraseña incorrecta (visto
+    # en esta sesión: psycopg2 ni siquiera llega a mostrar "contraseña
+    # incorrecta" con claridad, porque el mensaje de error de PostgreSQL
+    # viene en español y no se puede decodificar como UTF-8 -- aparece
+    # como UnicodeDecodeError, mucho más confuso).
+    Write-Host "  Usuario '$PgUser' ya existe -- actualizando su contraseña a la que acabás de ingresar." -ForegroundColor DarkGray
+    Invoke-Psql "ALTER USER $PgUser WITH PASSWORD '$PgPassword';"
 } else {
     Invoke-Psql "CREATE USER $PgUser WITH PASSWORD '$PgPassword';"
 }
@@ -206,12 +216,15 @@ $NativePython = Join-Path $InstallDir "venv\Scripts\python.exe"
 if (-not (Test-Path $NativePython)) { throw "No se encontró $NativePython -- ¿está bien instalado el panel en $InstallDir?" }
 
 Write-Host "`nInstalando/actualizando dependencias (por si requirements.txt cambió)..." -ForegroundColor Cyan
-Push-Location $InstallDir
-try {
-    & $NativePython -m pip install -q -r "central\requirements.txt"
-} finally {
-    Pop-Location
-}
+# Ruta ABSOLUTA a propósito -- una relativa ("central\requirements.txt")
+# depende de que el directorio de trabajo del proceso de pip (heredado
+# de PowerShell vía Push-Location) esté bien sincronizado, y eso no
+# siempre pasa igual en toda sesión elevada (visto en esta sesión: pip
+# no encontró el archivo con una ruta relativa, mientras que la llamada
+# de más abajo con -m SÍ funcionó -- más seguro no depender de esto acá).
+$RequirementsPath = Join-Path $InstallDir "central\requirements.txt"
+& $NativePython -m pip install -q -r $RequirementsPath
+if ($LASTEXITCODE -ne 0) { throw "pip install falló (código $LASTEXITCODE) -- revisá el mensaje de arriba antes de seguir." }
 
 Write-Host "`nMigrando los datos reales (esto puede tardar si hay muchas marcaciones)..." -ForegroundColor Cyan
 $env:DATABASE_URL = $DatabaseUrl

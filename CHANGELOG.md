@@ -72,6 +72,25 @@ para el procedimiento completo de release.
   chocar), y la aplicación arrancó normal contra la base ya migrada.
 
 ### Corregido
+- **`migrar_a_postgresql.ps1` fallaba al re-correrlo sobre un usuario de
+  PostgreSQL que ya existía de un intento anterior** -- el script dejaba
+  la contraseña real en PostgreSQL sin tocar ("ya existe, se deja
+  igual"), pero seguía usando la contraseña recién tipeada/generada en
+  ESA corrida para armar la conexión -- nunca coincidían. El error que
+  esto producía era particularmente confuso: no "contraseña incorrecta"
+  sino un `UnicodeDecodeError` de psycopg2 (el mensaje de autenticación
+  fallida de PostgreSQL viene en español, en una codificación que
+  psycopg2 no esperaba). Reportado por el usuario en su segundo intento
+  real. Corregido: si el usuario ya existe, ahora el script actualiza su
+  contraseña (`ALTER USER ... WITH PASSWORD`) a la que se acaba de
+  ingresar, en vez de dejarla desincronizada. Mismo cambio corrigió de
+  paso que `pip install -r central\requirements.txt` fallaba con "No
+  such file or directory" por depender de una ruta relativa al
+  directorio de trabajo del proceso (no siempre bien propagado en una
+  sesión elevada) -- ahora usa una ruta absoluta. Verificado reproduciendo
+  el escenario exacto (usuario ya creado, contraseña distinta en la
+  segunda corrida): confirmó la actualización de contraseña y una
+  conexión real exitosa, sin el error de Unicode.
 - **`migrar_a_postgresql.ps1` no actualizaba `C:\Asistencia` con el
   código más reciente antes de migrar** -- si la carpeta de instalación
   tenía código de antes de que existiera `central/
