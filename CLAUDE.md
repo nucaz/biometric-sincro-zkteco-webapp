@@ -550,6 +550,28 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     pudo probar** (misma limitación de siempre, sin consola elevada de
     verdad en este entorno): el registro real de las Tareas Programadas
     dentro de la llamada a `install.ps1`.
+  - **Bug real #2, encontrado por el usuario corriéndolo de verdad
+    contra su servidor** (2026-10-20, después de los puntos anteriores):
+    el script NO actualizaba `$InstallDir` (`C:\Asistencia`) con el
+    código del repo antes de migrar -- si esa carpeta tenía código de
+    antes de que existiera `central/migrate_sqlite_to_postgres.py` (el
+    caso normal: alguien clona el repo, hace `git pull`, pero
+    `C:\Asistencia` solo se actualiza cuando corre `install.ps1`, nunca
+    automáticamente), `python -m central.migrate_sqlite_to_postgres`
+    fallaba con `No module named central.migrate_sqlite_to_postgres`
+    ANTES de tocar ningún dato -- el script detectó el fallo y dejó todo
+    intacto (panel detenido, respaldo a salvo, mensaje claro de cómo
+    volver), tal como está diseñado para una migración fallida. No se
+    perdió nada, pero sí había que corregir la causa. Arreglado
+    agregando el mismo `robocopy ... /MIR /XD venv ... /XF *.db
+    devices.json` que ya usa `install.ps1`, ahora ANTES del intento de
+    migración (no solo al final), más un `pip install -r
+    requirements.txt` también antes de migrar por si la lista de
+    dependencias cambió. Verificado reproduciendo el error exacto
+    (carpeta de prueba con un `central/` viejo, sin el script de
+    migración) y confirmando que el `robocopy` lo trae y que el módulo
+    importa después -- sin volver a instalar PostgreSQL para esto, ya
+    que es un problema de archivos, no de conexión a la base.
 
 ## Estado actual / pendientes
 
@@ -697,11 +719,22 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   quien sí tenga virtualización disponible, no como el camino principal
   que se pensaba al empezar esta sesión. **Pendiente**: lo mismo que la
   entrada anterior -- probarlo con una consola elevada de verdad contra
-  una instalación nativa real. **Sin commitear** (sin pedir commit
-  todavía). Dejó una carpeta vacía `C:\Program Files\PostgreSQL\17` en
-  esta PC de dev (residuo del desinstalador de PostgreSQL, un bloqueo de
-  seguridad de la herramienta impidió borrarla) -- inofensiva, el
-  usuario la puede borrar cuando quiera.
+  una instalación nativa real. Commiteado y pusheado a `origin/main`
+  (`3e103e7`, `83244f7`). Dejó una carpeta vacía `C:\Program
+  Files\PostgreSQL\17` en esta PC de dev (residuo del desinstalador de
+  PostgreSQL, un bloqueo de seguridad de la herramienta impidió
+  borrarla) -- inofensiva, el usuario la puede borrar cuando quiera.
+- **2026-10-21: usuario corrió `migrar_a_postgresql.ps1` de verdad
+  contra su servidor y encontró el bug real #2** documentado arriba en
+  "Arquitectura y decisiones clave" (faltaba actualizar `C:\Asistencia`
+  con el código nuevo antes de migrar) -- corregido con `robocopy` +
+  `pip install` antes del intento de migración, verificado reproduciendo
+  el error exacto en una carpeta de prueba. **Todavía sin confirmar**:
+  si el usuario ya volvió a correr el script con el fix y le funcionó de
+  punta a punta en su servidor real -- la vez anterior se detuvo justo
+  en este error, antes de tocar ningún dato (el respaldo del SQLite ya
+  se había hecho y quedó a salvo). **Sin commitear** (sin pedir commit
+  todavía).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

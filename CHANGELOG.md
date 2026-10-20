@@ -72,6 +72,16 @@ para el procedimiento completo de release.
   chocar), y la aplicación arrancó normal contra la base ya migrada.
 
 ### Corregido
+- **`migrar_a_postgresql.ps1` no actualizaba `C:\Asistencia` con el
+  código más reciente antes de migrar** -- si la carpeta de instalación
+  tenía código de antes de que existiera `central/
+  migrate_sqlite_to_postgres.py`, la migración fallaba con "No module
+  named central.migrate_sqlite_to_postgres" en vez de migrar. Reportado
+  por el usuario corriéndolo de verdad contra su servidor. Corregido:
+  ahora el script actualiza `$InstallDir` con `robocopy` (mismos
+  excludes que ya usa `install.ps1`, nunca toca el `.db` real ni
+  `devices.json`) y reinstala `requirements.txt` ANTES de intentar
+  migrar, no solo al final.
 - **El `db` (PostgreSQL) de `docker-compose.yml` nunca publicaba el
   puerto 5432 hacia afuera del host** -- solo era visible entre los
   contenedores del propio `docker compose` (`web`/`sync`), nunca desde

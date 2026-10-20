@@ -178,6 +178,17 @@ Get-Process -Name "python" -ErrorAction SilentlyContinue |
     Stop-Process -Force -ErrorAction SilentlyContinue
 Write-Host "Tareas detenidas." -ForegroundColor Green
 
+# Actualiza $InstallDir con el código de ESTE repo (el que ya hiciste
+# "git pull" acá) ANTES de intentar migrar -- sin esto, migrate_sqlite_
+# to_postgres.py podía no existir todavía en $InstallDir si la última
+# vez que corriste install.ps1 ahí fue antes de que este script
+# existiera. Mismos excludes que usa install.ps1 (nunca toca el .db real
+# ni devices.json).
+Write-Host "`nActualizando $InstallDir con el código más reciente..." -ForegroundColor Cyan
+$SourceDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
+robocopy $SourceDir $InstallDir /MIR /XD venv __pycache__ dist dist_installer build .git /XF *.db devices.json | Out-Null
+Write-Host "Código actualizado." -ForegroundColor Green
+
 $BackupDir = Join-Path $InstallDir "backups"
 if (-not (Test-Path $BackupDir)) { New-Item -ItemType Directory -Path $BackupDir | Out-Null }
 $Timestamp = Get-Date -Format "yyyyMMdd_HHmmss"
@@ -193,6 +204,14 @@ Write-Host "Respaldo listo. GUARDALO -- no lo borres hasta confirmar que todo qu
 $DatabaseUrl = "postgresql+psycopg2://${PgUser}:${PgPassword}@localhost:${PgPort}/${PgDb}"
 $NativePython = Join-Path $InstallDir "venv\Scripts\python.exe"
 if (-not (Test-Path $NativePython)) { throw "No se encontró $NativePython -- ¿está bien instalado el panel en $InstallDir?" }
+
+Write-Host "`nInstalando/actualizando dependencias (por si requirements.txt cambió)..." -ForegroundColor Cyan
+Push-Location $InstallDir
+try {
+    & $NativePython -m pip install -q -r "central\requirements.txt"
+} finally {
+    Pop-Location
+}
 
 Write-Host "`nMigrando los datos reales (esto puede tardar si hay muchas marcaciones)..." -ForegroundColor Cyan
 $env:DATABASE_URL = $DatabaseUrl
