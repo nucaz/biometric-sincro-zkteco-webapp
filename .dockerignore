@@ -1,0 +1,16 @@
+venv/
+__pycache__/
+*.pyc
+*.db
+*.db-shm
+*.db-wal
+*.log
+*.csv
+.git/
+.github/
+build/
+dist/
+dist_installer/
+devices.json
+deploy/docs/*.pdf
+_manual_tmp/
