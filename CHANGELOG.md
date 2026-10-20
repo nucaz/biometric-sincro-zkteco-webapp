@@ -12,6 +12,36 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- **Migración a PostgreSQL nativa, sin Docker**
+  (`deploy/windows_server/migrar_a_postgresql.ps1`): para cuando el
+  servidor central tampoco tiene virtualización disponible (ej. es una
+  VM de Hyper-V sin virtualización anidada habilitada). Usa PostgreSQL
+  para Windows instalado como cualquier programa (sin BIOS, sin
+  hipervisor), crea el usuario/base de la app con `psql`, migra los
+  datos reales con el mismo `central/migrate_sqlite_to_postgres.py`, y
+  reinstala el panel con el `install.ps1` nativo de siempre (apuntado a
+  `-DatabaseUrl`) -- el panel sigue siendo exactamente el mismo
+  mecanismo de Tareas Programadas que ya corre en producción, nada
+  cambia ahí salvo la base de datos detrás. Probado de punta a punta
+  contra una instalación real de PostgreSQL 17 (no Docker): encontró y
+  corrigió un bug real -- el mensaje de error de PostgreSQL para "el rol
+  ya existe" viene LOCALIZADO según el idioma de Windows (en español:
+  "el rol «x» ya existe", no "already exists"), así que la primera
+  versión (que buscaba ese texto en inglés) nunca detectaba
+  correctamente un segundo intento sobre un usuario/base ya creados.
+  Corregido consultando `pg_roles`/`pg_database` ANTES de crear, en vez
+  de crear y adivinar el error después.
+- **Agente remoto nativo, sin Docker** (`deploy/windows_server/
+  install_agente_remoto.ps1`, `agente_remoto_servicio.ps1`, `.bat`
+  `AsistenciaAgenteRemoto_*`): para una sede cuya PC remota no tiene
+  virtualización habilitada en BIOS (Docker Desktop no arranca ahí).
+  Mismo mecanismo que ya usa el panel central nativo (Python + venv +
+  Tarea Programada de Windows, sin Docker para nada) aplicado al agente
+  remoto (`central/remote_agent.py`, que no tiene ninguna dependencia de
+  Docker). Pide siempre el nombre del agente y los datos de conexión a
+  la base central; el script de gestión agrega un `Diagnose` que prueba
+  la conexión real a la central (`Test-NetConnection`) y muestra el
+  `DATABASE_URL` guardado con la contraseña enmascarada.
 - **Migración real de datos SQLite -> PostgreSQL**
   (`central/migrate_sqlite_to_postgres.py`,
   `deploy/docker/migrar_servidor_central.ps1`): hasta ahora Docker solo

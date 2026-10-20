@@ -462,6 +462,94 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     correrlo en producción -- recomendar al usuario un ensayo en una
     copia/servidor de prueba antes del corte real, no ir directo a
     producción con esto.
+- **Agente remoto SIN Docker** (`deploy/windows_server/
+  install_agente_remoto.ps1`, `agente_remoto_servicio.ps1`,
+  `.bat` `AsistenciaAgenteRemoto_*`): Docker Desktop en Windows necesita
+  virtualización habilitada en BIOS (Hyper-V/WSL2) -- en una PC de sede
+  remota donde eso no está disponible (hardware viejo, política de IT,
+  BIOS bloqueada), Docker Desktop directamente no arranca. `central/
+  remote_agent.py` NO tiene ninguna dependencia de Docker -- es un
+  script de Python puro que solo necesita `AGENT_NAME` y `DATABASE_URL`
+  como variables de entorno, así que corre perfecto como una Tarea
+  Programada más, exactamente con el mismo patrón que ya usa
+  `deploy\windows_server\install.ps1` para `AsistenciaWeb`/
+  `AsistenciaSync` (venv + `Register-ScheduledTask -User SYSTEM`).
+  `install_agente_remoto.ps1` es la versión "solo agente" de ese mismo
+  patrón: pide SIEMPRE el nombre del agente y los datos de conexión a la
+  base central (nunca valores por defecto en silencio, mismo principio
+  que el resto de los instaladores de esta sesión), arma el
+  `DATABASE_URL`, lo guarda como variable de entorno a nivel de máquina
+  (igual que `install.ps1` ya hace con `SECRET_KEY`/`DATABASE_URL`), y
+  registra la tarea `AsistenciaAgenteRemoto`. Instala en
+  `C:\AsistenciaAgente` por defecto -- deliberadamente distinto de
+  `C:\Asistencia` (el panel central) para que nunca choquen si alguna
+  vez conviven en la misma máquina. `agente_remoto_servicio.ps1` agrega
+  un `Diagnose` que no existía en `service.ps1`: extrae host/puerto del
+  `DATABASE_URL` guardado (con regex, enmascarando la contraseña al
+  mostrarlo) y corre `Test-NetConnection` contra la central -- mismo
+  diagnóstico `PingSucceeded`/`TcpTestSucceeded` que ya se usó para
+  encontrar el bug del puerto 5432 no publicado, pero empaquetado para
+  que el usuario no tenga que escribirlo a mano cada vez.
+  - Probado en esta sesión: el instalador completo (sin elevar, hasta el
+    punto donde pide Administrador) contra una carpeta de prueba --
+    copia la app, arma el venv, instala dependencias, escribe el
+    resumen con credenciales, y confirma que `central.remote_agent`
+    importa limpio en ese venv (prueba real de que psycopg2-binary y el
+    resto de `requirements.txt` quedaron bien instalados). También
+    `agente_remoto_servicio.ps1 -Action Status/Diagnose` (sin tarea
+    registrada aún, sin elevar) y el bloqueo correcto de `-Action Start`
+    sin permisos de administrador. La lógica de enmascarado y extracción
+    de host/puerto del `DATABASE_URL` se probó aparte con un valor de
+    ejemplo. **Lo que NO se pudo probar en este entorno** (sin forma de
+    conseguir una consola elevada): el registro real de la Tarea
+    Programada y el ciclo completo Start/Stop/Restart sobre una tarea
+    real -- mismo tipo de limitación ya documentada para
+    `migrar_servidor_central.ps1`.
+- **Migración a PostgreSQL SIN Docker en la central**
+  (`deploy/windows_server/migrar_a_postgresql.ps1`): resultó que el
+  servidor central TAMPOCO puede correr Docker -- es una VM de Hyper-V
+  sin virtualización anidada habilitada (confirmado por el usuario), el
+  mismo problema que la sede remota pero un nivel más arriba. Esta
+  versión reemplaza el contenedor `db` de `migrar_servidor_central.ps1`
+  por PostgreSQL para Windows instalado nativamente (sin virtualización,
+  sin BIOS, un instalador normal de Windows) y reutiliza
+  `deploy\windows_server\install.ps1` (CON `-DatabaseUrl`, un parámetro
+  que YA existía antes de esta sesión, sin tocarlo) en vez de `docker
+  compose up -d --build` para dejar el panel corriendo -- el panel
+  nativo sigue siendo Tareas Programadas de toda la vida, cero cambio de
+  mecanismo, solo cambia qué base de datos hay detrás.
+  `migrate_sqlite_to_postgres.py` (el motor de migración en sí) no
+  necesitó NINGÚN cambio -- es agnóstico de cómo esté hospedado el
+  Postgres destino (Docker o nativo), solo le importa el `DATABASE_URL`.
+  - **Bug real encontrado probando contra un PostgreSQL de verdad** (no
+    Docker, que corre en inglés/C por defecto): el mensaje de error de
+    PostgreSQL para "el rol ya existe" viene LOCALIZADO según el idioma
+    de Windows -- en este Windows en español, psql devuelve "el rol
+    «asistencia» ya existe", nunca la cadena en inglés "already exists"
+    que la primera versión del script buscaba con `-match`. Esto nunca
+    se habría visto contra el Postgres de Docker (que corre en
+    inglés/C por defecto) -- otra confirmación de que `docker compose`
+    no es un sustituto de probar contra el motor/SO real de destino.
+    Arreglado reemplazando "crear y adivinar el error" por "consultar
+    `pg_roles`/`pg_database` ANTES de crear" (`Test-PgRoleExists`/
+    `Test-PgDatabaseExists`) -- nunca parsear el texto de un error de
+    una herramienta que puede estar localizada, hay que consultar el
+    estado real o usar el código SQLSTATE, no el mensaje.
+  - Probado de punta a punta en esta sesión instalando PostgreSQL 17
+    real vía `winget` (silencioso, puerto 5555 de prueba, se desinstaló
+    al terminar): descubrimiento de `psql.exe`, creación de usuario y
+    base reales, migración completa (14 tablas, incluida la corrida
+    contra la base local real que para este punto ya tenía 41,405
+    marcaciones -- sigue creciendo porque algo la sincroniza en segundo
+    plano en esta PC de dev), reinstalación del panel vía `install.ps1
+    -DatabaseUrl` (degradó con gracia por falta de elevación, mismo
+    comportamiento esperado que sin este cambio), e idempotencia
+    confirmada aparte contra el Postgres real ya con los datos puestos
+    (`Test-PgRoleExists`/`Test-PgDatabaseExists` devolvieron `True` la
+    segunda vez, `False` para un rol que no existía). **Lo que NO se
+    pudo probar** (misma limitación de siempre, sin consola elevada de
+    verdad en este entorno): el registro real de las Tareas Programadas
+    dentro de la llamada a `install.ps1`.
 
 ## Estado actual / pendientes
 
@@ -579,8 +667,41 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   las tareas nativas) no se pudo probar tal cual se invoca en este
   entorno (sin forma de conseguir una consola elevada de Windows acá),
   así que antes de correrlo en el servidor real, recomendado hacer un
-  primer ensayo en una copia de prueba. **Todo sin commitear** (sin
-  pedir commit todavía).
+  primer ensayo en una copia de prueba. Commiteado y pusheado a
+  `origin/main` en 4 commits (`e18093d`..`0a27c57`): Docker, API +
+  puente remoto, instalador/gestión de Docker, y esta migración.
+- **2026-10-20: agente remoto sin Docker** (`deploy/windows_server/
+  install_agente_remoto.ps1`, `agente_remoto_servicio.ps1`, `.bat`
+  `AsistenciaAgenteRemoto_*`) -- el usuario reportó que la PC de la sede
+  remota donde pensaba desplegar no tiene virtualización habilitada en
+  BIOS, así que Docker Desktop no es una opción ahí. Ver el bullet
+  correspondiente en "Arquitectura y decisiones clave" arriba para el
+  detalle completo (mismo patrón que el panel central nativo, sin
+  Docker para nada). **Pendiente**: probarlo con una consola realmente
+  elevada (Tarea Programada real, ciclo Start/Stop/Restart) -- en este
+  entorno no se pudo. **Sin commitear** (sin pedir commit todavía).
+- **2026-10-20: resultó que la central TAMPOCO tiene virtualización** --
+  es una VM de Hyper-V sin virtualización anidada (confirmado por el
+  usuario al preguntarle directamente, después de que la sede remota ya
+  había dado el mismo problema). Se construyó
+  `deploy/windows_server/migrar_a_postgresql.ps1` -- la versión SIN
+  Docker de `migrar_servidor_central.ps1` (PostgreSQL para Windows
+  nativo + el `install.ps1` nativo de siempre con `-DatabaseUrl`). Ver
+  el bullet correspondiente en "Arquitectura y decisiones clave" arriba
+  para el bug real que encontró (mensajes de error de PostgreSQL
+  localizados al español) y el detalle de las pruebas (PostgreSQL 17
+  real instalado y desinstalado vía `winget` en esta sesión). **Con
+  esto, la ruta recomendada para TODO este despliegue -- central y sede
+  remota -- pasó a ser 100% nativa, sin Docker en ningún lado**; los
+  scripts de Docker (`deploy/docker/`) quedan como alternativa para
+  quien sí tenga virtualización disponible, no como el camino principal
+  que se pensaba al empezar esta sesión. **Pendiente**: lo mismo que la
+  entrada anterior -- probarlo con una consola elevada de verdad contra
+  una instalación nativa real. **Sin commitear** (sin pedir commit
+  todavía). Dejó una carpeta vacía `C:\Program Files\PostgreSQL\17` en
+  esta PC de dev (residuo del desinstalador de PostgreSQL, un bloqueo de
+  seguridad de la herramienta impidió borrarla) -- inofensiva, el
+  usuario la puede borrar cuando quiera.
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,
