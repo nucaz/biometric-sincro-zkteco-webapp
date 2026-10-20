@@ -609,6 +609,35 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     destino tenía los datos de la corrida anterior) -- la señal de que
     la conexión en sí quedó perfecta, el único motivo de parada fue la
     protección contra duplicar datos, que es el comportamiento correcto.
+  - **Bug real #4, mismo usuario, tercer intento**: con los dos bugs
+    anteriores ya corregidos, el `pip install` volvió a fallar con "No
+    such file or directory" -- esta vez con la ruta ABSOLUTA ya
+    corregida del bug anterior (`C:\Asistencia\central\requirements.txt`),
+    así que el problema nunca fue la ruta relativa. La pista real: el
+    usuario tiene el repo clonado dentro de `C:\WINDOWS\System32\
+    biometric-sincro-zkteco-webapp` -- una ubicación con permisos y
+    protecciones especiales de Windows (posible interferencia de
+    antivirus/Windows Defender con una copia masiva ahí, o algo más
+    específico del propio System32) que lo más probable es que haya
+    hecho fallar el `robocopy` para ese archivo puntual EN SILENCIO --
+    el script nunca revisaba el código de salida de `robocopy` (sus
+    códigos son por bits: 0-7 éxito, 8+ error real, no el patrón
+    0/distinto-de-0 de la mayoría de los programas), así que seguía
+    adelante como si la copia hubiera salido bien. Corregido agregando
+    el chequeo de `$LASTEXITCODE -ge 8` de `robocopy` MÁS un `Test-Path`
+    explícito sobre `requirements.txt` después de copiar -- si falla
+    cualquiera de los dos, el mensaje de error ahora sugiere
+    explícitamente mover el repo fuera de una carpeta protegida de
+    Windows como `C:\WINDOWS\System32`. Verificado que el código de
+    salida de un `robocopy` exitoso normal es 3 (dentro del rango
+    0-7), así que el chequeo nuevo no rompe el caso normal -- no se
+    pudo reproducir la falla real DENTRO de System32 en esta sesión
+    (clonar algo ahí a propósito solo para probarlo es más riesgo del
+    que vale la pena para este diagnóstico). **Recomendación pendiente
+    de que el usuario confirme**: mover el repo fuera de
+    `C:\WINDOWS\System32` a una carpeta normal (ej. `C:\Proyectos\...`)
+    -- probablemente resuelve esto de raíz, más allá del parche
+    defensivo.
 
 ## Estado actual / pendientes
 
@@ -762,18 +791,26 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   PostgreSQL, un bloqueo de seguridad de la herramienta impidió
   borrarla) -- inofensiva, el usuario la puede borrar cuando quiera.
 - **2026-10-21: usuario corriendo `migrar_a_postgresql.ps1` de verdad
-  contra su servidor, dos rondas de bugs reales encontrados y
-  corregidos** -- ver el detalle completo de ambos en "Arquitectura y
-  decisiones clave" arriba (bug #2: `C:\Asistencia` con código viejo,
-  ya commiteado en `a2fd09f`; bug #3: contraseña de PostgreSQL
-  desincronizada en una segunda corrida, causaba un `UnicodeDecodeError`
-  confuso en vez de un claro error de autenticación -- este todavía SIN
-  commitear). **Todavía sin confirmar**: que el usuario haya corrido el
-  script con el fix del bug #3 de punta a punta en su servidor real y
-  le haya dejado el panel andando contra PostgreSQL -- cada intento
-  hasta ahora se detuvo ANTES de tocar datos (el respaldo del SQLite
-  real sigue a salvo en `C:\Asistencia\backups\`, el panel nativo sigue
-  ahí sin tocar, nada se perdió en ningún intento).
+  contra su servidor, CUATRO rondas de bugs reales encontrados y
+  corregidos, uno por intento** -- ver el detalle completo de los
+  cuatro en "Arquitectura y decisiones clave" arriba:
+  - Bug #2 (`C:\Asistencia` con código viejo, faltaba el script de
+    migración) -- commiteado en `a2fd09f`.
+  - Bug #3 (contraseña de PostgreSQL desincronizada en una segunda
+    corrida, `UnicodeDecodeError` confuso) -- commiteado en `00654b0`.
+  - Bug #4 (`robocopy` fallando en silencio porque el repo del usuario
+    está clonado dentro de `C:\WINDOWS\System32\`, un directorio
+    protegido de Windows -- el script nunca revisaba su código de
+    salida) -- corregido con chequeo de `$LASTEXITCODE` + `Test-Path`,
+    **todavía SIN commitear**.
+  **Todavía sin confirmar**: que el usuario haya movido el repo fuera
+  de `C:\WINDOWS\System32` (recomendado, probablemente la causa raíz
+  real del bug #4) y que haya corrido el script de punta a punta con
+  éxito -- cada intento hasta ahora se detuvo ANTES de tocar datos (el
+  respaldo del SQLite real sigue a salvo en `C:\Asistencia\backups\`,
+  el panel nativo sigue ahí sin tocar, nada se perdió en ningún
+  intento). Si sigue fallando después de mover el repo, revisar también
+  si hay antivirus/Windows Defender interfiriendo con la copia.
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

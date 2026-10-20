@@ -197,6 +197,21 @@ Write-Host "Tareas detenidas." -ForegroundColor Green
 Write-Host "`nActualizando $InstallDir con el código más reciente..." -ForegroundColor Cyan
 $SourceDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 robocopy $SourceDir $InstallDir /MIR /XD venv __pycache__ dist dist_installer build .git /XF *.db devices.json | Out-Null
+# Robocopy usa códigos de salida por bits (0-7 = éxito/informativo, 8+ =
+# error real) -- NUNCA 0/distinto-de-0 como la mayoría de los programas.
+# Sin este chequeo, un robocopy que fallara en silencio (visto en esta
+# sesión: el usuario tiene el repo clonado dentro de C:\WINDOWS\System32,
+# una carpeta con permisos/protecciones especiales de Windows que puede
+# bloquear una copia sin que robocopy devuelva un error obvio en pantalla)
+# dejaba seguir el script igual, y recién fallaba más abajo con un error
+# de "no such file" mucho menos claro sobre la causa real.
+if ($LASTEXITCODE -ge 8) {
+    throw "robocopy falló (código $LASTEXITCODE) copiando $SourceDir a $InstallDir -- revisá permisos. Si tu repo está clonado dentro de C:\WINDOWS\System32 o alguna otra carpeta protegida de Windows, movelo a una carpeta normal (ej. C:\Proyectos\...) y volvé a intentar."
+}
+$RequirementsCheck = Join-Path $InstallDir "central\requirements.txt"
+if (-not (Test-Path $RequirementsCheck)) {
+    throw "Después de actualizar el código, no se encuentra $RequirementsCheck -- la copia no funcionó bien. Si tu repo está clonado dentro de C:\WINDOWS\System32 o alguna otra carpeta protegida de Windows, movelo a una carpeta normal (ej. C:\Proyectos\...) y volvé a intentar."
+}
 Write-Host "Código actualizado." -ForegroundColor Green
 
 $BackupDir = Join-Path $InstallDir "backups"

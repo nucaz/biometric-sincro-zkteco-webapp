@@ -72,6 +72,19 @@ para el procedimiento completo de release.
   chocar), y la aplicación arrancó normal contra la base ya migrada.
 
 ### Corregido
+- **`migrar_a_postgresql.ps1` no detectaba un `robocopy` que fallara en
+  silencio** -- el código de salida de `robocopy` nunca se revisaba (sus
+  códigos son por bits: 0-7 éxito/informativo, 8+ error real, no el
+  0/distinto-de-0 habitual). En el servidor real del usuario, que tiene
+  el repo clonado dentro de `C:\WINDOWS\System32\` (una carpeta con
+  permisos/protecciones especiales de Windows), la copia de
+  `central/requirements.txt` hacia `C:\Asistencia` no se completaba bien
+  y el script seguía adelante igual, fallando recién más abajo en `pip
+  install` con un "No such file or directory" que no explicaba la causa
+  real. Corregido: ahora revisa el código de salida de `robocopy` Y
+  confirma con `Test-Path` que `requirements.txt` quedó copiado antes de
+  seguir -- si no, para con un mensaje claro sugiriendo mover el repo
+  fuera de una carpeta protegida de Windows.
 - **`migrar_a_postgresql.ps1` fallaba al re-correrlo sobre un usuario de
   PostgreSQL que ya existía de un intento anterior** -- el script dejaba
   la contraseña real en PostgreSQL sin tocar ("ya existe, se deja
