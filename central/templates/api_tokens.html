@@ -1,0 +1,33 @@
+{% extends "base.html" %}
+{% block title %}Tokens de API{% endblock %}
+{% block content %}
+<div class="toolbar">
+  <h2 style="margin:0;">Tokens de API</h2>
+  <a class="btn" href="{{ url_for('api_token_new') }}">+ Nuevo token</a>
+</div>
+<p class="muted">Credenciales para que OTRA aplicación (ej. la de planillas/tareo) lea y escriba datos acá por <code>/api/v1/...</code>, sin usar una cuenta de persona. Documentación de las rutas: ver <code>central/api.py</code>.</p>
+<table>
+  <thead><tr><th>Nombre</th><th>Permiso</th><th>Creado</th><th>Por</th><th>Último uso</th><th>Estado</th><th></th></tr></thead>
+  <tbody>
+    {% for t in tokens %}
+    <tr>
+      <td>{{ t.name }}</td>
+      <td>{% if t.scope_write %}<span class="badge warn">Lectura + Escritura</span>{% else %}<span class="badge">Solo lectura</span>{% endif %}</td>
+      <td>{{ t.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+      <td>{{ t.created_by or '-' }}</td>
+      <td>{{ t.last_used_at.strftime('%Y-%m-%d %H:%M') if t.last_used_at else 'Nunca' }}</td>
+      <td>{% if t.active %}Activo{% else %}<span class="badge warn">Revocado</span>{% endif %}</td>
+      <td>
+        {% if t.active %}
+        <form class="inline-form" method="post" action="{{ url_for('api_token_revoke', token_id=t.id) }}" onsubmit="return confirm('¿Revocar este token? Deja de funcionar al instante.');">
+          <button type="submit" class="btn danger">Revocar</button>
+        </form>
+        {% endif %}
+      </td>
+    </tr>
+    {% else %}
+    <tr><td colspan="7" class="muted">Sin tokens creados todavía.</td></tr>
+    {% endfor %}
+  </tbody>
+</table>
+{% endblock %}

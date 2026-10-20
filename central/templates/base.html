@@ -140,6 +140,7 @@
       <a class="nav-item {{ 'active' if active_endpoint == 'backup_page' }}" href="{{ url_for('backup_page') }}">{{ icon('database') }}<span class="nav-label">Backup</span></a>
       <a class="nav-item {{ 'active' if active_endpoint == 'audit_log' }}" href="{{ url_for('audit_log') }}">{{ icon('file-text') }}<span class="nav-label">Auditoría</span></a>
       <a class="nav-item {{ 'active' if active_endpoint == 'permissions_page' }}" href="{{ url_for('permissions_page') }}">{{ icon('shield') }}<span class="nav-label">Permisos</span></a>
+      <a class="nav-item {{ 'active' if active_endpoint in ['api_tokens_list', 'api_token_new'] }}" href="{{ url_for('api_tokens_list') }}">{{ icon('code') }}<span class="nav-label">API</span></a>
       {% endif %}
     </nav>
     <div class="sidebar-footer">

@@ -1,0 +1,18 @@
+{% extends "base.html" %}
+{% block title %}Token creado{% endblock %}
+{% block content %}
+<h2>Token "{{ name }}" creado</h2>
+<div class="callout lab" style="background:#fef3c7; border:1px solid #f59e0b; border-radius:6px; padding:16px; max-width:640px;">
+  <strong>Copia este token ahora -- no se vuelve a mostrar.</strong>
+  <p class="muted" style="margin:10px 0 4px;">Solo se guarda su huella (hash); si lo pierdes, hay que revocar este y crear uno nuevo.</p>
+  <code style="display:block; background:#fff; padding:12px; border-radius:4px; font-size:14px; word-break:break-all; user-select:all;">{{ token }}</code>
+</div>
+
+<h3 style="margin-top:28px;">Cómo usarlo</h3>
+<p>En cada llamada, la otra aplicación manda este encabezado:</p>
+<pre style="background:#1f2937; color:#e5e7eb; padding:14px; border-radius:6px; overflow-x:auto;">Authorization: Bearer {{ token }}</pre>
+
+<p class="muted">Permiso: {% if scope_write %}lectura y escritura{% else %}solo lectura{% endif %}. Rutas disponibles bajo <code>/api/v1/</code>: <code>employees</code>, <code>schedules</code>, <code>attendance</code>, <code>absences</code>, <code>tardiness</code>{% if scope_write %}, y creación/edición de <code>employees</code>/<code>schedules</code>{% endif %}.</p>
+
+<a class="btn" href="{{ url_for('api_tokens_list') }}">Volver a Tokens de API</a>
+{% endblock %}

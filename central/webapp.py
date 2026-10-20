@@ -14,6 +14,7 @@ import json
 import os
 import re
 import sys
+import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FuturesTimeoutError
 from datetime import datetime, timedelta
 
@@ -33,9 +34,10 @@ from attendance_system import ZKTecoAttendance, check_network_reachable
 from central.db import SessionLocal, init_db
 from central.models import (
     Device, AttendanceLog, EmployeeMap, Employee, User, TrustedDevice, AuditLog, RoleModule,
-    Schedule, EmployeeSchedule, AttendanceException,
+    Schedule, EmployeeSchedule, AttendanceException, ApiToken, DeviceCommand,
 )
 from central import device_lock, attendance_rules
+from central.api import api as api_blueprint, generate_token
 from central.icons import ICONS
 from central.auth import (
     login_required, admin_required, super_admin_required, verify_password, hash_password,
@@ -51,6 +53,7 @@ from central.audit import log_event, resolve_hostname, client_ip, client_user_ag
 
 app = Flask(__name__)
 app.secret_key = os.environ.get("SECRET_KEY", "dev-only-change-me")
+app.register_blueprint(api_blueprint)
 
 # Idempotent (create_all only adds missing tables) -- called at import time,
 # not just under __main__, so it also runs under a WSGI server like
@@ -63,6 +66,12 @@ PAGE_SIZE = 200
 @app.before_request
 def guard():
     if request.endpoint in ("login", "verify_2fa", "static"):
+        return
+    # /api/v1/* authenticates itself via api_token_required() (a Bearer
+    # token, checked per-route against ApiToken) -- it's for another
+    # application, not a person with a browser session, so it must never
+    # redirect to /login like every other route here does.
+    if request.blueprint == "api":
         return
     if "user_id" not in flask_session:
         return redirect(url_for("login", next=request.path))
@@ -179,7 +188,7 @@ def run_with_hard_timeout(fn, *args, **kwargs):
         )
 
 
-def run_device_op(device_pk, device_name, fn, *args, **kwargs):
+def run_device_op(device_pk, device_name, fn, *args, action=None, params=None, **kwargs):
     """Like run_with_hard_timeout, but for an action that opens a
     connection to one specific physical device (Probar conexión,
     Reiniciar, Apagar, Vaciar, Usuarios). Refuses to start a second one
@@ -190,7 +199,34 @@ def run_device_op(device_pk, device_name, fn, *args, **kwargs):
     central.sync (see central/device_lock.py), so this also won't collide
     with a "Sincronizar"/"Descargar respaldo" mid-flight for this device --
     including one running as a separate scheduled `python -m central.sync`
-    process, not just another request in this same web app."""
+    process, not just another request in this same web app.
+
+    If the device is managed by a remote agent (Device.agent_name is
+    set -- see central/remote_agent.py), `fn` is IGNORED entirely: it's
+    a Python closure around a live pyzk connection, which can't cross a
+    process boundary. `action` (a short string both this file and
+    central/remote_agent.py agree on) + `params` (a small JSON-safe
+    dict) get queued as a DeviceCommand instead, and this polls for the
+    remote agent to claim and complete it, within the same
+    HARD_SYNC_TIMEOUT_SECONDS ceiling. A caller that hasn't been
+    retrofitted with `action=` yet gets a clear error for a remote
+    device instead of a confusing timeout from a direct-connect attempt
+    that could never have reached it."""
+    db = SessionLocal()
+    try:
+        device = db.get(Device, device_pk)
+        agent_name = device.agent_name if device else None
+    finally:
+        db.close()
+
+    if agent_name:
+        if not action:
+            raise RuntimeError(
+                f"'{device_name}' es administrado por el agente remoto '{agent_name}', pero esta acción "
+                "todavía no soporta el puente remoto."
+            )
+        return _run_device_op_remote(device_pk, device_name, agent_name, action, params or {})
+
     device_lock.acquire(device_pk, device_name, owner="webapp")
 
     def guarded():
@@ -207,6 +243,42 @@ def run_device_op(device_pk, device_name, fn, *args, **kwargs):
             f"Sin respuesta del dispositivo tras {HARD_SYNC_TIMEOUT_SECONDS} segundos -- "
             "probablemente un problema de red con ese equipo, no de la aplicación."
         )
+
+
+def _run_device_op_remote(device_pk, device_name, agent_name, action, params):
+    """The remote-agent half of run_device_op() -- see its docstring.
+    Polls once a second (cheap: one indexed row lookup) instead of
+    pushing anything to the agent -- it's the agent that polls
+    device_commands on its own schedule (central/remote_agent.py,
+    POLL_SECONDS), same DB-mediated pattern as device_lock.py."""
+    db = SessionLocal()
+    try:
+        cmd = DeviceCommand(
+            device_pk=device_pk, action=action, params=json.dumps(params),
+            status="pending", requested_by=flask_session.get("username"),
+        )
+        db.add(cmd)
+        db.commit()
+        cmd_id = cmd.id
+    finally:
+        db.close()
+
+    deadline = time.monotonic() + HARD_SYNC_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        time.sleep(1)
+        db = SessionLocal()
+        try:
+            cmd = db.get(DeviceCommand, cmd_id)
+            if cmd.status == "done":
+                return json.loads(cmd.result) if cmd.result else None
+            if cmd.status == "error":
+                raise RuntimeError(cmd.error or "error desconocido en el agente remoto")
+        finally:
+            db.close()
+    raise TimeoutError(
+        f"Sin respuesta del agente remoto '{agent_name}' para '{device_name}' tras {HARD_SYNC_TIMEOUT_SECONDS} "
+        "segundos -- revisa que el agente siga corriendo en el servidor remoto."
+    )
 
 
 # ---------------------------------------------------------------- auth ----
@@ -931,6 +1003,7 @@ def device_new():
                 ip=ip, port=port, active=1,
                 comm_password=int(comm_password) if comm_password.isdigit() else 0,
                 terminal_no=int(terminal_no) if terminal_no.isdigit() else None,
+                agent_name=request.form.get("agent_name", "").strip() or None,
             )
             db.add(device)
             db.commit()
@@ -957,6 +1030,7 @@ def device_edit(device_pk):
             device.port = int(request.form.get("port") or 4370)
             device.comm_password = int(comm_password) if comm_password.isdigit() else 0
             device.terminal_no = int(terminal_no) if terminal_no.isdigit() else None
+            device.agent_name = request.form.get("agent_name", "").strip() or None
             device.active = 1 if request.form.get("active") else 0
             db.commit()
             _audit(db, "device_edit", target=device.name)
@@ -1011,19 +1085,27 @@ def device_test(device_pk):
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        device_name, device_ip, device_port, comm_password = device.name, device.ip, device.port, device.comm_password
+        device_name, device_ip, device_port, comm_password, agent_name = (
+            device.name, device.ip, device.port, device.comm_password, device.agent_name,
+        )
     finally:
         db.close()
 
-    reachable, detail = check_network_reachable(device_ip, device_port)
-    if not reachable:
-        db = SessionLocal()
-        try:
-            _audit(db, "device_test", target=device_name, detail=f"ERROR (red): {detail}")
-        finally:
-            db.close()
-        flash(f"'{device_name}' ({device_ip}:{device_port}) no responde en la red: {detail}")
-        return redirect(url_for("devices_status"))
+    # Only meaningful from THIS server's own network position -- for a
+    # remote-agent device the whole point is that this server can't
+    # reach it directly, so this would always (correctly, uselessly)
+    # fail here. The remote agent discovers real reachability itself
+    # when run_device_op() hands it the "test" action below.
+    if not agent_name:
+        reachable, detail = check_network_reachable(device_ip, device_port)
+        if not reachable:
+            db = SessionLocal()
+            try:
+                _audit(db, "device_test", target=device_name, detail=f"ERROR (red): {detail}")
+            finally:
+                db.close()
+            flash(f"'{device_name}' ({device_ip}:{device_port}) no responde en la red: {detail}")
+            return redirect(url_for("devices_status"))
 
     def work():
         system = ZKTecoAttendance(device_ip, port=device_port, password=comm_password or 0)
@@ -1041,7 +1123,7 @@ def device_test(device_pk):
     db = SessionLocal()
     try:
         try:
-            result = run_device_op(device_pk, device_name, work)
+            result = run_device_op(device_pk, device_name, work, action="test")
         except Exception as e:
             _audit(db, "device_test", target=device_name, detail=f"ERROR: {e}")
             flash(f"'{device_name}': {e}")
@@ -2445,6 +2527,64 @@ def permissions_page():
             "permissions.html", modules=MODULES, roles=CONFIGURABLE_ROLES,
             role_labels=ROLE_LABELS, current=current,
         )
+    finally:
+        db.close()
+
+
+# --------------------------------------------------------- api tokens ----
+# Credentials for ANOTHER APPLICATION (the planillas/tareo app) to call
+# central/api.py -- not a human account, so this is fixed to super_admin
+# the same way Cuentas/Backup/Permisos are: issuing a write-scoped token
+# is adjacent to privilege escalation (it can create/edit employees and
+# horarios same as an admin_required route can), so it's not on the
+# per-module MODULES list either.
+
+@app.route("/api-tokens")
+@super_admin_required
+def api_tokens_list():
+    db = SessionLocal()
+    try:
+        tokens = db.query(ApiToken).order_by(ApiToken.created_at.desc()).all()
+        return render_template("api_tokens.html", tokens=tokens)
+    finally:
+        db.close()
+
+
+@app.route("/api-tokens/new", methods=["GET", "POST"])
+@super_admin_required
+def api_token_new():
+    if request.method == "POST":
+        name = request.form.get("name", "").strip()
+        if not name:
+            flash("Ponle un nombre al token (ej. 'App de planillas').")
+            return redirect(url_for("api_token_new"))
+        scope_write = bool(request.form.get("scope_write"))
+        raw, token_hash = generate_token()
+        db = SessionLocal()
+        try:
+            db.add(ApiToken(
+                name=name, token_hash=token_hash, scope_read=True, scope_write=scope_write,
+                active=True, created_by=flask_session.get("username"),
+            ))
+            db.commit()
+            _audit(db, "api_token_add", target=name, detail=f"write={scope_write}")
+            return render_template("api_token_created.html", name=name, token=raw, scope_write=scope_write)
+        finally:
+            db.close()
+    return render_template("api_token_form.html")
+
+
+@app.route("/api-tokens/<int:token_id>/revoke", methods=["POST"])
+@super_admin_required
+def api_token_revoke(token_id):
+    db = SessionLocal()
+    try:
+        token = db.get(ApiToken, token_id) or abort_404()
+        token.active = False
+        db.commit()
+        _audit(db, "api_token_revoke", target=token.name)
+        flash(f"Token '{token.name}' revocado -- deja de funcionar al instante.")
+        return redirect(url_for("api_tokens_list"))
     finally:
         db.close()
 

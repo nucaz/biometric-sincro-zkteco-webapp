@@ -22,6 +22,7 @@ ICONS = {
     "calendar": '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/>',
     "calendar-minus": '<rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/><line x1="9" y1="16" x2="15" y2="16"/>',
     "key": '<circle cx="8" cy="14" r="4"/><line x1="11" y1="11" x2="20" y2="2"/><line x1="16" y1="6" x2="19" y2="9"/>',
+    "code": '<polyline points="8 6 2 12 8 18"/><polyline points="16 6 22 12 16 18"/>',
     "database": '<ellipse cx="12" cy="5" rx="9" ry="3"/><line x1="3" y1="5" x2="3" y2="19"/><line x1="21" y1="5" x2="21" y2="19"/><ellipse cx="12" cy="19" rx="9" ry="3"/>',
     "file-text": '<rect x="4" y="2" width="16" height="20" rx="2"/><line x1="8" y1="7" x2="16" y2="7"/><line x1="8" y1="11" x2="16" y2="11"/><line x1="8" y1="15" x2="13" y2="15"/>',
     "shield": '<polygon points="12 2 20 6 20 12 12 22 4 12 4 6"/><polyline points="9 12 11 14 15 10"/>',

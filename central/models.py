@@ -29,6 +29,13 @@ class Device(Base):
     deleted = Column(Boolean, nullable=False, default=False)  # hidden from the devices list/sync, but the row (and its history) is never actually dropped -- see device_delete()
     last_synced_at = Column(DateTime, nullable=True)
     last_sync_status = Column(Text, nullable=True)
+    # If set, this device is reached through a remote bridge agent (see
+    # central/remote_agent.py and DeviceCommand below) instead of this
+    # server connecting to it directly -- e.g. a branch site behind a
+    # VPN this server can't route to, but whose own on-site server can.
+    # Null (the default, every device before this existed) means the
+    # direct connection this app has always used, completely unchanged.
+    agent_name = Column(String(64), nullable=True)
     created_at = Column(DateTime, default=utcnow, nullable=False)
 
     logs = relationship("AttendanceLog", back_populates="device")
@@ -50,6 +57,37 @@ class DeviceLock(Base):
     device_pk = Column(Integer, primary_key=True)
     locked_at = Column(DateTime, nullable=False)
     locked_by = Column(String(150), nullable=True)  # hostname:pid, best-effort, for diagnostics only
+
+
+class DeviceCommand(Base):
+    """A device-management action queued for a REMOTE agent to execute
+    (see Device.agent_name and central/remote_agent.py) -- the same
+    DB-mediated coordination idea as DeviceLock above, just carrying a
+    job instead of a lock, needed because a remote device can't be
+    reached in-process by central/webapp.py's run_device_op() the way a
+    local one is.
+
+    webapp.py's run_device_op() writes a 'pending' row (action + a small
+    JSON-safe params dict) and polls this same row for 'done'/'error',
+    up to its usual HARD_SYNC_TIMEOUT_SECONDS ceiling -- central/
+    remote_agent.py is the only thing that ever picks one up, dispatches
+    it to the exact same ZKTecoAttendance call the in-process path would
+    have made, and writes the result back. Only one side ever writes any
+    given status transition (webapp.py creates 'pending'; the agent
+    claims and completes it), so this doesn't need its own lock."""
+    __tablename__ = "device_commands"
+
+    id = Column(Integer, primary_key=True)
+    device_pk = Column(Integer, ForeignKey("devices.id"), nullable=False, index=True)
+    action = Column(String(40), nullable=False)
+    params = Column(Text, nullable=True)  # JSON-encoded dict
+    status = Column(String(20), nullable=False, default="pending")  # pending | done | error
+    result = Column(Text, nullable=True)  # JSON-encoded, only when status == 'done'
+    error = Column(Text, nullable=True)  # only when status == 'error'
+    requested_by = Column(String(64), nullable=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    picked_up_at = Column(DateTime, nullable=True)
+    completed_at = Column(DateTime, nullable=True)
 
 
 class AttendanceLog(Base):
@@ -305,3 +343,27 @@ class TrustedDevice(Base):
     expires_at = Column(DateTime, nullable=False)
 
     user = relationship("User", back_populates="trusted_devices")
+
+
+class ApiToken(Base):
+    """A credential for a machine (another app), not a person -- used by
+    central/api.py instead of the cookie-session login every human screen
+    uses. The raw token is shown exactly once, right after creation; only
+    its SHA-256 is ever stored (see generate_token() in central/api.py for
+    why SHA-256, not a slow salted hash like user passwords get: the
+    token's own 256 bits of randomness is the security margin, and a fast
+    deterministic hash is what lets a request look itself up with one
+    indexed query instead of comparing against every live token)."""
+    __tablename__ = "api_tokens"
+
+    id = Column(Integer, primary_key=True)
+    name = Column(String(120), nullable=False)  # human label, e.g. "App de planillas"
+    token_hash = Column(String(64), nullable=False, unique=True)
+    # write implies read -- there's no write-only token, see
+    # api_token_required() in central/api.py.
+    scope_read = Column(Boolean, nullable=False, default=True)
+    scope_write = Column(Boolean, nullable=False, default=False)
+    active = Column(Boolean, nullable=False, default=True)
+    created_at = Column(DateTime, default=utcnow, nullable=False)
+    created_by = Column(String(64), nullable=True)
+    last_used_at = Column(DateTime, nullable=True)

@@ -21,6 +21,10 @@
   <label>Número de dispositivo (opcional, solo informativo)
     <input type="number" name="terminal_no" value="{{ device.terminal_no if device and device.terminal_no else '' }}" placeholder="Como en ZKTimeNet, si lo usan">
   </label>
+  <label>Agente remoto (opcional)
+    <input type="text" name="agent_name" value="{{ device.agent_name if device and device.agent_name else '' }}" placeholder="Déjalo vacío si este servidor se conecta directo al equipo">
+  </label>
+  <p class="muted" style="margin-top:-6px;">Para un equipo en una sede que este servidor no puede alcanzar directo (ej. detrás de otra VPN): el nombre debe coincidir EXACTO con el <code>AGENT_NAME</code> del agente remoto instalado en esa sede (ver <code>central/remote_agent.py</code>). Hoy solo "Probar conexión" funciona vía agente remoto -- el resto de las acciones de dispositivo siguen necesitando conexión directa.</p>
   {% if device %}
   <label style="flex-direction: row; align-items: center; gap: 8px;">
     <input type="checkbox" name="active" {{ 'checked' if device.active }} style="width:auto;"> Activo (se incluye en la sincronización)

@@ -164,13 +164,23 @@ def backup_device(session, device: Device, progress=None):
     return raw, new_count
 
 
-def sync_all(progress=None) -> dict:
+def sync_all(progress=None, only_agent=None) -> dict:
+    """only_agent: None (the default) syncs every LOCAL device --
+    Device.agent_name IS NULL, i.e. everything this process can reach
+    directly, same as before Device.agent_name existed. Pass an agent
+    name to instead sync only the devices THAT agent owns -- used by
+    central/remote_agent.py running on a branch server that can reach
+    those devices' LAN but not the central server's. A device is only
+    ever synced by its own owner this way: the central process never
+    attempts (and fails) against a device it was never going to reach."""
     progress = progress or _noop
     init_db()
     session = SessionLocal()
     results = {}
     try:
-        devices = session.query(Device).filter(Device.active == 1, Device.deleted.is_(False)).all()
+        query = session.query(Device).filter(Device.active == 1, Device.deleted.is_(False))
+        query = query.filter(Device.agent_name == only_agent) if only_agent else query.filter(Device.agent_name.is_(None))
+        devices = query.all()
         for i, device in enumerate(devices, start=1):
             progress(f"[{i}/{len(devices)}] Sincronizando '{device.name}'...")
             try:
@@ -189,7 +199,11 @@ def sync_all(progress=None) -> dict:
 
 
 if __name__ == "__main__":
-    results = sync_all()
+    # Set on a remote branch server (see central/remote_agent.py and
+    # deploy/docker/README.md) so the SAME `python -m central.sync` that
+    # runs centrally also works unchanged there -- it just syncs that
+    # agent's own devices instead of the local-only default.
+    results = sync_all(only_agent=os.environ.get("AGENT_NAME") or None)
     for name, result in results.items():
         print(f"{name}: {result}")
 

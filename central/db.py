@@ -43,6 +43,7 @@ def init_db():
     _migrate_add_attendance_log_indexes()
     _migrate_add_schedule_exit_time()
     _migrate_add_employee_profile_columns()
+    _migrate_add_device_agent_name()
 
 
 def _migrate_add_user_lockout_columns():
@@ -139,3 +140,17 @@ def _migrate_add_employee_profile_columns():
         for name, ddl_type in new_columns.items():
             if name not in existing:
                 conn.execute(text(f"ALTER TABLE employees ADD COLUMN {name} {ddl_type}"))
+
+
+def _migrate_add_device_agent_name():
+    """See Device.agent_name's docstring in models.py -- nullable/
+    additive, every device that existed before this stays NULL (direct
+    connection, unchanged behavior)."""
+    from sqlalchemy import inspect, text
+    inspector = inspect(engine)
+    if "devices" not in inspector.get_table_names():
+        return
+    existing = {c["name"] for c in inspector.get_columns("devices")}
+    if "agent_name" not in existing:
+        with engine.begin() as conn:
+            conn.execute(text("ALTER TABLE devices ADD COLUMN agent_name VARCHAR(64)"))

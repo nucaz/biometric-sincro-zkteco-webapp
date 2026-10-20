@@ -1,0 +1,15 @@
+{% extends "base.html" %}
+{% block title %}Nuevo token{% endblock %}
+{% block content %}
+<h2>Nuevo token de API</h2>
+<form class="card" method="post" style="max-width:480px;">
+  <label>Nombre
+    <input type="text" name="name" placeholder="Ej. App de planillas" required>
+  </label>
+  <label style="flex-direction: row; align-items: center; gap: 8px;">
+    <input type="checkbox" name="scope_write" style="width:auto;"> Permitir escritura (crear/editar horarios y empleados), además de lectura
+  </label>
+  <p class="muted" style="margin:0;">Todo token puede leer (marcaciones, faltas, tardanzas, empleados, horarios). Deja la casilla sin marcar para un token de solo lectura.</p>
+  <button type="submit">Generar token</button>
+</form>
+{% endblock %}
