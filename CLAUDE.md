@@ -202,11 +202,11 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   empleado en marcaciones se resuelve por lote (`_bulk_display_names` en
   `webapp.py`), nunca por fila — antes había una consulta a
   `employee_map` por cada marcación cruda, el cuello de botella real
-  detrás de "el panel está lento" (no el motor SQLite en sí). Antes de
-  proponer migrar a Postgres/MySQL (ya soportado hoy vía `DATABASE_URL`
-  sin cambiar código), confirmar que el volumen real ya no lo aguanta
-  aun con estos índices — no asumirlo solo porque "SQLite sí a veces se
-  siente lento".
+  detrás de "el panel está lento" (no el motor SQLite en sí). Esto sigue
+  siendo relevante para el Windows de producción actual (todavía SQLite),
+  pero YA NO es el criterio para decidir si migrar a Postgres — eso se
+  decidió aparte el 2026-10-15 (multiplataforma + Docker + integración
+  con la app de planillas), independiente de cómo esté el rendimiento.
 - **"NN-xxxxx"**: lo asigna el propio reloj ZKTeco a alguien enrolado sin
   nombre (huella/tarjeta sin usar el teclado del equipo) — confirmado
   seguido el dato hasta `attendance_system.py` (`u.name` viene tal cual
@@ -267,46 +267,335 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   usuario pegó -- ahora se trunca a los primeros 8 y muestra "Ningún
   empleado tiene ese DNI en el maestro" en vez de quedarse ahí sin
   explicación.
+- **API de integración** (`central/api.py`, Blueprint Flask montado en
+  `app` desde `webapp.py`): auth por `ApiToken` (hash SHA-256 del
+  token, NO el hash salteado/lento de las contraseñas -- el propio
+  token ya tiene 256 bits de entropía, lo que importa acá es poder
+  buscarlo con una consulta indexada en vez de comparar contra cada
+  token vivo uno por uno), nunca sesión de navegador. `guard()` (el
+  `@app.before_request` que protege TODO lo demás) tiene que exceptuar
+  `request.blueprint == "api"` explícitamente, o cualquier llamada sin
+  cookie de sesión redirigiría a `/login` en vez de devolver JSON 401 --
+  si se agrega otro blueprint en el futuro que tampoco deba pasar por
+  la sesión, va en esa misma excepción. Las rutas de escritura
+  REUTILIZAN (import diferido DENTRO de cada función, nunca al tope del
+  archivo -- `webapp.py` importa este módulo para registrar el
+  blueprint, así que un import al tope sería circular)
+  `_employee_profile_fields_from_form()` / `_schedule_fields_from_form()`
+  / `_assign_schedule()` de `webapp.py`, pasando el JSON de la petición
+  por `_as_api_form()` (convierte a lo que esas funciones ya esperan:
+  `dict.get(key, default)` con strings, igual que `request.form`) --
+  así una regla fijada ahí (ej. "no borrar un campo que la fila no
+  trajo") aplica también acá, nunca una segunda copia que alguien se
+  olvide de actualizar junto con la primera.
+- **Puente de administración remota** (`Device.agent_name`,
+  `DeviceCommand`, `central/remote_agent.py`): reutiliza la idea de
+  `device_lock.py` (coordinación cruzada de procesos por la base de
+  datos compartida, no un protocolo de red nuevo) para un problema
+  distinto -- encolar un comando en vez de un candado.
+  `run_device_op(device_pk, device_name, fn, action=None, params=None)`
+  en `webapp.py` revisa `Device.agent_name`: si está vacío, exactamente
+  el camino de siempre (`fn` corre en este proceso, cero cambio de
+  comportamiento); si no, IGNORA `fn` por completo (una clausura de
+  Python con una conexión pyzk viva no puede cruzar a otro proceso) y
+  en su lugar encola una fila en `device_commands` con `action` +
+  `params`, sondeando hasta que el agente remoto la marque `done`/
+  `error`, con el mismo tope `HARD_SYNC_TIMEOUT_SECONDS`. Un caller que
+  todavía no pasa `action=` para un dispositivo remoto falla AL
+  INSTANTE con un mensaje claro -- a propósito, para no quedarse
+  colgado 150s en un intento de conexión directa que nunca iba a
+  funcionar. `central/remote_agent.py#_run_action()` tiene que
+  mantenerse sincronizado a mano con cada `action=` nuevo que se agregue
+  en `webapp.py` -- no hay nada que lo obligue automáticamente, son dos
+  archivos separados a propósito (uno corre en la central, el otro en
+  la sede remota). El mismo archivo también sincroniza marcaciones
+  reutilizando `central.sync.sync_all(only_agent=AGENT_NAME)` sin
+  cambios -- `sync_all()` ahora filtra `Device.agent_name IS NULL`
+  (local, el comportamiento de toda la vida) vs. `== only_agent`, así
+  que la central nunca intenta (ni falla contra) un dispositivo que un
+  agente remoto ya es dueño.
+- **Instalador y scripts de gestión de Docker** (`deploy/docker/
+  install.ps1`/`install.sh`, `manage.ps1`/`manage.sh`,
+  `docker-compose.agent.yml`): un instalador interactivo que SIEMPRE
+  pregunta (nunca asume valores por defecto en silencio, a pedido
+  explícito del usuario) si la máquina es servidor central o agente
+  remoto, y arma el `.env` correspondiente (`$RepoRoot\.env` para
+  central, `deploy\docker\.env` para agente -- Docker Compose busca el
+  `.env` junto al primer `-f` que se le pase, así que el archivo tiene
+  que vivir en esa carpeta exacta, no en cualquier lado). El modo
+  elegido queda en `deploy/docker/.deploy_mode` (texto plano
+  "central"/"agent"), que `manage.ps1`/`manage.sh` leen para saber qué
+  `docker-compose*.yml` usar sin volver a preguntar. Dos bugs reales
+  encontrados AL PROBARLO (no se habrían visto leyendo el código):
+  - **PowerShell se traga flags cortas de una sola letra pasadas sueltas
+    a una función propia** si calzan por prefijo único con un parámetro
+    común (`-Debug`, `-Verbose`, etc.): `Invoke-Compose up -d` hacía que
+    "-d" se interpretara como `-Debug` DE LA FUNCIÓN, nunca llegaba a
+    `docker`, así que corría `docker compose up` sin el `-d` real y se
+    quedaba pegado en primer plano mostrando logs para siempre en vez de
+    desprenderse. Pasa solo al invocar una función/cmdlet de PowerShell,
+    nunca al llamar un ejecutable nativo directo (`docker ...` a secas
+    no tiene este problema). Arreglado pasando los argumentos como UN
+    array por un parámetro con nombre (`Invoke-Compose -ComposeArgs
+    @("up", "-d")`) en vez de sueltos -- cualquier wrapper de PowerShell
+    nuevo sobre un comando con flags de una letra en este repo debe
+    seguir ese patrón.
+  - **`if [ -f "$archivo" ]; then ...; fi` en bash, sin `else`, sale con
+    código 0 (éxito) aunque la condición sea falsa** -- no hereda el
+    código de salida del `test`. Un `$(func ... || echo default)` que
+    depende de que `func` "falle" cuando el archivo no existe NUNCA se
+    activa: `install.sh` dejaba `POSTGRES_USER`/`POSTGRES_DB`/
+    `SYNC_DAILY_AT` vacíos en el primer `.env` (no se notaba porque
+    `docker-compose.yml` ya trae sus propios valores por defecto vía
+    `${VAR:-asistencia}`). Arreglado haciendo que la función siempre
+    imprima algo (vacío si no hay nada) y aplicando el default en el
+    llamador con `"${valor:-default}"`, nunca confiando en el código de
+    salida de una función que envuelve un `if` sin `else`.
+  - Ambos `install.ps1`/`manage.ps1` llevan BOM UTF-8 al guardarlos (a
+    propósito, con `[System.IO.File]::WriteAllBytes` -- el `Write`/`Edit`
+    normal no lo agrega): sin BOM, PowerShell 5.1 (el que trae Windows
+    Server, no una versión más nueva) adivina mal la codificación de un
+    `.ps1` con tildes/ñ y corrompe caracteres acentuados al punto de
+    romper el parseo del script entero (visto en esta sesión: un "Ó"
+    convertido en un caracter que cerraba un string PowerShell antes de
+    tiempo). Cualquier `.ps1` nuevo en este repo con texto en español
+    necesita este mismo paso después de escribirlo.
+  - Los `.bat` de `deploy/docker/` (a diferencia de los de
+    `deploy\windows_server\`) NO se auto-elevan a Administrador --
+    Docker Desktop corre con la sesión del usuario interactivo, y una
+    consola elevada aparte puede terminar hablando con un Docker Desktop
+    distinto o con ninguno.
+  - Probado de punta a punta en esta sesión, instalación real con
+    contenedores (modo central: build, espera de Postgres, creación de
+    super admin, panel respondiendo 200; modo agente: build, contenedor
+    arriba, falla limpia y clara al no encontrar un Postgres central de
+    verdad en esta prueba) y los 5 comandos de gestión
+    (start/stop/restart/status/diagnose) en PowerShell y en bash,
+    limpiando los contenedores/volúmenes de prueba al terminar.
+  - **Bug real encontrado el 2026-10-19, probando contra el servidor
+    central real por primera vez**: el servicio `db` de
+    `docker-compose.yml` nunca publicaba el puerto 5432 hacia afuera del
+    host -- solo era visible ENTRE los contenedores del mismo
+    `docker compose` (`web`/`sync` le hablan a `db` por el nombre del
+    servicio en la red interna de Docker, nunca por el puerto publicado),
+    así que un agente remoto en otra sede, por más que la VPN
+    funcionara perfecto, nunca iba a poder llegar -- `Test-NetConnection`
+    mostraba `PingSucceeded: True` / `TcpTestSucceeded: False`, la firma
+    típica de "la ruta de red está bien, no hay nada escuchando ahí".
+    Corregido agregando `ports: - "${POSTGRES_PORT:-5432}:5432"` al
+    servicio `db`. `install.ps1`/`install.sh` ahora preguntan también el
+    puerto (`POSTGRES_PORT`, 5432 por defecto) y, en modo central,
+    intentan abrir ese puerto en el Firewall de Windows con
+    `New-NetFirewallRule` SI la consola está elevada (si no, imprimen el
+    comando exacto para correrlo a mano) -- la rama elevada no se pudo
+    probar en esta sesión (sin forma de conseguir una consola UAC
+    elevada en este entorno), solo la rama sin elevar; `install.sh`
+    (Linux) solo imprime la guía (`ufw`/`firewalld`), no la automatiza,
+    porque varía demasiado entre distros para hacerlo con confianza.
+    **Esto NO es un problema de VPN ni del `ommit_ping=True`** -- antes
+    de este fix, NINGÚN agente remoto iba a poder conectarse nunca,
+    sin importar qué tan bien estuviera la VPN.
+  - **Requisito de orden que no estaba explícito antes**: un agente
+    remoto necesita que el servidor CENTRAL ya esté corriendo con este
+    `docker-compose.yml` (PostgreSQL de verdad, escuchando en red) --
+    si la central sigue con la instalación nativa de Windows (SQLite,
+    sin ningún servicio de base de datos en red), cualquier intento de
+    conexión desde una sede remota va a fallar de la misma manera
+    (`TcpTestSucceeded: False`) aunque la VPN esté perfecta, porque
+    simplemente no hay nada escuchando en el puerto 5432 todavía. Antes
+    de configurar una PC remota, confirmar que la central ya migró.
+- **Migración de datos SQLite -> PostgreSQL**
+  (`central/migrate_sqlite_to_postgres.py`,
+  `deploy/docker/migrar_servidor_central.ps1`): resuelve el pendiente
+  que quedaba de "Docker arranca con una base vacía" -- copia cada tabla
+  en el orden de `Base.metadata.sorted_tables` (ya viene ordenado por
+  dependencia de llaves foráneas, no hay que mantener el orden a mano),
+  conservando los IDs originales (no re-numera nada, así que
+  `AttendanceLog.device_pk`, `EmployeeMap.employee_id`, etc. siguen
+  apuntando a lo mismo) y reajustando la secuencia de Postgres de cada
+  tabla con `pg_get_serial_sequence()` + `setval()` después de insertar
+  -- sin esto, el primer `INSERT` real de la app después de migrar
+  intentaría reusar un ID que el script ya usó a mano y fallaría por
+  llave duplicada. Tolera que el SQLite de origen sea de una versión
+  anterior del esquema (le falte alguna tabla o columna agregada
+  después, ej. `api_tokens` o `devices.agent_name`): lo detecta con
+  `inspect()` sobre el origen y lo trata como "nada que migrar ahí
+  todavía" en vez de romperse -- las columnas agregadas después son
+  siempre nullable/con default por el mismo principio que ya sigue
+  `central/db.py` para sus propias migraciones, así que quedan en su
+  valor por defecto sin problema. Se niega a correr sobre un destino que
+  ya tenga filas salvo `--force` (protección contra correrlo dos veces
+  y duplicar todo). NUNCA escribe en el SQLite de origen, solo lee.
+  `migrar_servidor_central.ps1` es el orquestador real: pide
+  confirmación explícita, detiene las tareas programadas nativas,
+  respalda el SQLite con fecha ANTES de tocar nada, levanta SOLO el
+  contenedor `db` (vacío), corre la migración usando el Python del venv
+  nativo existente (`C:\Asistencia\venv\Scripts\python.exe`, que ya
+  tiene `psycopg2-binary` porque está en `central/requirements.txt`
+  desde que se agregó soporte a Postgres), y SOLO si la migración
+  termina sin errores levanta `web`/`sync` -- si falla, dice
+  explícitamente cómo reactivar las tareas nativas en vez de dejar al
+  usuario con el panel nuevo a medio armar y el viejo apagado. A
+  propósito, este script NO crea una cuenta de administrador nueva (a
+  diferencia de `install.ps1` en modo central) -- los admins reales ya
+  vienen en la tabla `users` migrada, crear uno nuevo ahí sería
+  redundante y confuso.
+  - Probado de punta a punta en esta sesión contra la base de datos
+    local real de este dev (6 empleados, 39,685 marcaciones, 2 cuentas
+    de usuario, 4 horarios, excepciones de asistencia): las 14 tablas
+    migraron con conteos exactos origen=destino, un `INSERT` de prueba
+    después de migrar tomó el siguiente ID sin chocar (confirma que el
+    `setval()` quedó bien), y `central.webapp:app` arrancó normal
+    (`GET /login` -> 200) contra la base ya migrada.
+  - El script `migrar_servidor_central.ps1` en sí (el orquestador
+    completo, con detención de tareas programadas reales) no se pudo
+    probar 100% tal cual se invoca, porque este entorno no puede
+    conseguir una consola de Windows elevada (UAC) -- se probó
+    copiándolo fuera de `deploy/docker/` con el chequeo de elevación y
+    los `Stop-ScheduledTask` reemplazados por no-ops (sin tareas
+    programadas reales en esta PC de desarrollo), contra una carpeta que
+    simula la instalación nativa. Todo lo demás (respaldo, preguntas,
+    `docker compose up -d --build db` solo, invocación de la migración,
+    `docker compose up -d --build` completo, intento de regla de
+    Firewall) corrió real y se verificó. **Falta probarlo tal cual,
+    como Administrador, contra una instalación nativa real** antes de
+    correrlo en producción -- recomendar al usuario un ensayo en una
+    copia/servidor de prueba antes del corte real, no ir directo a
+    producción con esto.
 
 ## Estado actual / pendientes
 
-- Rama `main`, árbol de trabajo limpio — la sesión del 2026-09-21/22
-  (horarios, faltas, tardanzas/horas extra, vacaciones/permisos, panel
-  de KPIs, menú lateral, limpieza de "NN-", ficha de empleado
-  enriquecida + plantillas Excel, buscador de DNI en Sin vincular) está
-  commiteada y pusheada a `origin/main`. Detalle línea por línea en
-  `CHANGELOG.md`; decisiones de diseño de todo lo anterior en
-  "Arquitectura y decisiones clave" arriba.
-- **Datos de ejemplo en `central/attendance.db` de ESTA computadora
-  (laboratorio local, nunca toca producción — `*.db` está en
-  `.gitignore`)**: 6 empleados (Greyvis Silva Falcón, Rolando Romero
-  Pasache, Fátima Velásquez López, Roberto Jacobo García, Raúl Ochante,
-  Clotilde Munarriz Romero) creados combinando marcaciones reales ya
-  sincronizadas del dispositivo PISO2 con horarios/vacaciones de
-  ejemplo, para poder demostrar el sistema completo y armar el manual
-  de RRHH. Si el usuario pregunta por qué ve estos nombres al probar en
-  local, es esto — no son altas suyas ni existen en producción.
+- Rama `main`. Todo hasta `e13f332` (2026-09-22: horarios, faltas,
+  tardanzas/horas extra, vacaciones/permisos, panel de KPIs, menú
+  lateral, limpieza de "NN-", ficha de empleado enriquecida + plantillas
+  Excel, buscador de DNI en Sin vincular) está commiteado y pusheado a
+  `origin/main`. Detalle línea por línea en `CHANGELOG.md`; decisiones
+  de diseño en "Arquitectura y decisiones clave" arriba.
+- **2026-09-23**: el PISO2 "se caía" intermitentemente -- causa raíz real
+  (no la que se sospechaba en la sesión del `ommit_ping=True`): el equipo
+  **cambia de IP sola** (DHCP sin reserva), de `172.16.1.241` a `.140` y
+  luego a `.25` en el mismo día. No es un bug de la app ni de red/ping --
+  cada vez que "deja de responder", lo primero es escanear el puerto 4370
+  en la subred (`central/attendance.db` guarda el último
+  `last_sync_status` y `audit_log` el historial de intentos) en vez de
+  asumir que la IP guardada en `Dispositivos` sigue siendo la correcta.
+  Pendiente de pedirle a redes una IP fija o reserva DHCP para que no se
+  repita.
+- **2026-10-15: Docker** (`Dockerfile`, `docker-compose.yml`,
+  `central/sync_loop.py`, `deploy/docker/README.md`) -- tres servicios
+  (`db` Postgres 16, `web` gunicorn, `sync` reemplaza al timer de
+  systemd / tarea de Windows, que no existen dentro de un contenedor).
+  Pensado como el despliegue nuevo "de verdad multiplataforma" (decisión
+  del usuario: reemplaza a los instaladores nativos a futuro, no convive
+  indefinidamente con ellos). **Probado de punta a punta en esta misma
+  sesión** con Docker Desktop (Windows) contra un Postgres real: build,
+  arranque de los 3 contenedores, `init_db()` crea las 12 tablas solo,
+  login + todas las pantallas clave responden 200, y -- la parte que
+  genuinamente no se podía asumir sin probarla -- el contenedor `web`
+  SÍ alcanza un reloj físico real de la LAN (PISO2, `172.16.1.25:4370`)
+  con la red *bridge* por defecto, sin ningún ajuste. Confirma además
+  que todo el esquema construido en sesiones anteriores (Schedule,
+  EmployeeSchedule, AttendanceException, campos nuevos de Employee) es
+  100% compatible con Postgres tal cual está, sin cambios de código.
+  **Todavía NO commiteado** (archivos nuevos, sin pedir commit todavía).
+- **2026-10-15: API + puente remoto** (misma sesión que Docker, después):
+  `/api/v1/...` (`central/api.py`, token en vez de sesión de navegador,
+  gestión de tokens en `/api-tokens`) con lectura de empleados/horarios/
+  marcaciones/faltas/tardanzas y escritura de empleados/horarios, para
+  la app de planillas/tareo externa. Y el puente de administración
+  remota (`central/remote_agent.py`, `Device.agent_name`,
+  `DeviceCommand`) para sedes cuyo biométrico este servidor no alcanza
+  directo pero cuyo propio servidor sí llega a Postgres por VPN --
+  **solo "Probar conexión" quedó retrofitteada en `run_device_op()`**;
+  Reiniciar/Apagar/Vaciar/gestión de Usuarios del dispositivo siguen
+  sin soportar el puente (fallan rápido con mensaje claro en vez de
+  intentar conectar directo, no se quedan colgadas). Ambos probados de
+  punta a punta: la API completa con el cliente de pruebas de Flask +
+  contra Postgres real en Docker; el puente remoto simulando dos
+  procesos (uno "central", uno "agente") contra el PISO2 real, incluido
+  el caso de una acción no retrofitteada fallando al instante. Todo
+  **sin commitear** al cierre de esta conversación si no se pidió.
+  - Bug real encontrado y corregido ANTES de la primera prueba (nunca
+    llegó a ejecutarse así): al insertar `ApiToken` en `models.py`
+    justo después de `TrustedDevice`, el `old_string` del primer
+    `Edit` cortó antes de la línea `user = relationship(...)` de
+    `TrustedDevice` sin notarlo, y esa línea quedó pegada dentro de
+    `ApiToken` en vez de en su clase -- SQLAlchemy lo delató de
+    inmediato (`Mapper 'TrustedDevice' has no property 'user'`) al
+    primer uso. Lección: después de insertar una clase nueva ENTRE dos
+    clases existentes en `models.py`, releer el bloque completo
+    (no solo lo que se acaba de escribir) antes de asumir que quedó
+    bien — un modelo grande como este tiene relaciones que se definen
+    varias líneas después del último `Column`, fáciles de no ver en
+    una lectura parcial.
+  - **Retrofit que falta** (mecánico, mismo patrón que "Probar
+    conexión", solo falta tiempo): Reiniciar, Apagar, Vaciar,
+    crear/editar/eliminar Usuarios del dispositivo -- cada uno necesita
+    (a) agregar la rama `action="..."` a su `run_device_op(...)` y (b)
+    agregar el branch correspondiente en `_run_action()` de
+    `central/remote_agent.py`. `device_sync`/`backup_device` NO pasan
+    por `run_device_op()` (usan `central.sync` directo), así que para
+    dispositivos remotos ya funcionan solos vía `sync_all(only_agent=...)`
+    -- no hay nada que retrofittear ahí.
+  - Migración de datos SQLite (producción Windows real) -> Postgres +
+    reemplazar las migraciones `_migrate_add_*` a mano por Alembic:
+    pedido por el usuario, **todavía no empezado**.
+- **2026-10-15: instalador y scripts de gestión de Docker** (misma
+  sesión, después de API + puente remoto): `deploy/docker/install.ps1`/
+  `install.sh` (elige central o agente, pide SIEMPRE los datos de
+  conexión/credenciales, deja `instalacion_<fecha>.txt` con el resumen)
+  y `manage.ps1`/`manage.sh` (`start/stop/restart/status/diagnose`) +
+  `.bat` de doble clic. Ver el bullet correspondiente en "Arquitectura y
+  decisiones clave" arriba para los dos bugs reales que aparecieron al
+  probarlo (PowerShell tragándose `-d` como `-Debug`, y un `if` de bash
+  sin `else` que nunca activaba el valor por defecto) -- ambos
+  corregidos y vueltos a probar de punta a punta. **Todavía NO
+  commiteado** (sin pedir commit todavía).
+- **2026-10-19: bug real de puerto/firewall encontrado probando contra
+  el servidor central de verdad** (usuario probando una PC remota real
+  por VPN, no un ensayo local): el servicio `db` de `docker-compose.yml`
+  nunca publicaba el puerto 5432 hacia afuera del host, así que ningún
+  agente remoto iba a poder conectarse nunca, sin importar qué tan bien
+  estuviera la VPN -- confirmado con el usuario que **la central sigue
+  con la instalación nativa de Windows (SQLite)**, todavía no migró a
+  Docker, así que esto es la primera vez que se iba a probar la
+  conexión real. Corregido (`docker-compose.yml` publica
+  `POSTGRES_PORT`, 5432 por defecto; `install.ps1`/`install.sh` lo
+  preguntan y `install.ps1` intenta abrir el Firewall de Windows solo
+  si corre elevado). Ver el bullet correspondiente en "Arquitectura y
+  decisiones clave" arriba para el detalle completo, incluida la
+  limitación de que la rama elevada del Firewall no se pudo probar en
+  esta sesión. **Todo esto sin commitear** (sin pedir commit todavía).
+- **2026-10-20: migración real SQLite -> PostgreSQL construida**
+  (`central/migrate_sqlite_to_postgres.py`,
+  `deploy/docker/migrar_servidor_central.ps1`) -- el pendiente de la
+  entrada anterior ("la migración real... todavía no empezado") ya no
+  aplica, se construyó y se probó de punta a punta contra la base local
+  real de este dev (6 empleados, 39,685 marcaciones -- ver el bullet
+  correspondiente en "Arquitectura y decisiones clave" arriba para el
+  detalle completo). **Lo que SÍ sigue pendiente**: correrlo de verdad
+  contra el servidor central de producción -- el orquestador completo
+  (`migrar_servidor_central.ps1`, con `Stop-ScheduledTask` real sobre
+  las tareas nativas) no se pudo probar tal cual se invoca en este
+  entorno (sin forma de conseguir una consola elevada de Windows acá),
+  así que antes de correrlo en el servidor real, recomendado hacer un
+  primer ensayo en una copia de prueba. **Todo sin commitear** (sin
+  pedir commit todavía).
+- **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
+  G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
+  soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,
+  ID de dispositivo 1-254, exactamente el modelo que `pyzk`/
+  `attendance_system.py` ya hablan (ADMS -- el protocolo de push a un
+  servidor cloud -- está disponible en el equipo pero NO es lo que esta
+  app usaría). Compatible en teoría; recomendado probar UN equipo real
+  contra `pyzk` antes de comprar varios, por la misma razón que el K20
+  ya dio sorpresas de firmware en esta misma base de código.
 - **Manual de usuario para RRHH**, Artifact publicado:
   https://claude.ai/artifact/52rSs6ftJj4fMS1SV5sNz7 — cubre cada
   pantalla con capturas del laboratorio local, las columnas de los dos
   imports de Excel, y un aviso de que es laboratorio, no producción.
   Para actualizarlo: `Artifact(action:"read", url:"<esa URL>")` primero
   (las variables de publicación no persisten entre conversaciones).
-- **Rendimiento**: se decidió NO migrar a Postgres/MySQL — la sospecha
-  inicial del usuario (motor de base de datos) no coincidía con la
-  causa raíz real (una consulta N+1 sin índice en la resolución de
-  nombres). Ya corregido con WAL + índices + resolución por lote. Si
-  después de esto vuelve a reportarse lento con el volumen real,
-  recién ahí evaluar el motor — la ruta ya existe vía `DATABASE_URL`
-  sin tocar código.
-- **Sin confirmar por el usuario**: si el procedimiento de despliegue
-  (ver abajo) ya se corrió en producción para los commits anteriores a
-  esta sesión (bloque de Cuentas/Permisos, `80947ca`..`3a1ba6a`) — y,
-  por separado, si el fix de `ommit_ping=True` + candado cross-proceso
-  resolvió del todo la intermitencia real del equipo PISO2 en uso
-  diario (se corrigió la causa raíz identificada, pero sin confirmación
-  posterior). Preguntar o recordar el procedimiento si reporta que "no
-  ve reflejado" algo nuevo.
 
 ## Procedimiento estándar de despliegue
 

@@ -12,6 +12,125 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- **Migración real de datos SQLite -> PostgreSQL**
+  (`central/migrate_sqlite_to_postgres.py`,
+  `deploy/docker/migrar_servidor_central.ps1`): hasta ahora Docker solo
+  arrancaba con una base vacía -- esto trae los datos REALES (empleados,
+  marcaciones, usuarios del panel, horarios, vacaciones/permisos, todo)
+  desde el SQLite nativo. El script de Python copia tabla por tabla en
+  el orden correcto de llaves foráneas, conserva los IDs originales,
+  reajusta las secuencias de PostgreSQL para que el próximo insert de la
+  app no choque con un ID ya usado, y se niega a correr si el destino ya
+  tiene datos (salvo `--force`). Tolera un SQLite de origen más viejo
+  que todavía no tenga alguna tabla/columna agregada después (ej.
+  `api_tokens`, `devices.agent_name`) -- la trata como "nada que migrar
+  ahí todavía", no como error.
+  `migrar_servidor_central.ps1` es el que de verdad se corre en el
+  servidor central: pide confirmación explícita, detiene las tareas
+  programadas nativas (para que nada siga escribiendo durante la
+  migración), hace un respaldo con fecha del SQLite real ANTES de tocar
+  nada, pide los datos de conexión de PostgreSQL (siempre, igual que
+  `install.ps1`), migra, y solo si la migración salió bien levanta el
+  panel completo -- si falla, no toca el panel nuevo y deja clarísimo
+  cómo volver al sistema nativo (las tareas programadas no se eliminan,
+  solo se detienen). También intenta abrir el puerto de PostgreSQL en el
+  Firewall de Windows automáticamente. Probado de punta a punta en esta
+  sesión contra la base de datos local real (6 empleados, 39,685
+  marcaciones, 2 cuentas de usuario, horarios, vacaciones): las 14
+  tablas migraron con conteos exactos, la secuencia de Postgres quedó
+  bien (un insert de prueba después de migrar tomó el siguiente ID sin
+  chocar), y la aplicación arrancó normal contra la base ya migrada.
+
+### Corregido
+- **El `db` (PostgreSQL) de `docker-compose.yml` nunca publicaba el
+  puerto 5432 hacia afuera del host** -- solo era visible entre los
+  contenedores del propio `docker compose` (`web`/`sync`), nunca desde
+  otra máquina. Esto rompía por completo la idea de "agente remoto"
+  (una sede detrás de otra VPN conectándose a la base central): la VPN
+  en sí funcionaba perfecto (`ping` llegaba), pero el puerto nunca
+  respondía porque Docker no lo estaba exponiendo. Encontrado en vivo
+  con el usuario probando una PC remota real contra el servidor central
+  (`Test-NetConnection ... -Port 5432` con `PingSucceeded: True` /
+  `TcpTestSucceeded: False`). Ahora el puerto (`POSTGRES_PORT`,
+  configurable, 5432 por defecto) se publica -- `install.ps1`/
+  `install.sh` lo preguntan y además intentan abrir ese puerto en el
+  Firewall de Windows automáticamente cuando corren en una consola de
+  Administrador (si no, dejan el comando exacto para hacerlo a mano).
+  Verificado de punta a punta: contenedor `db` publicando
+  `0.0.0.0:5432->5432/tcp` y una conexión real desde fuera del
+  contenedor confirmando `TcpTestSucceeded: True`.
+
+### Agregado
+- **Instalador interactivo y scripts de gestión para el despliegue con
+  Docker** (`deploy/docker/install.ps1` / `install.sh`,
+  `deploy/docker/manage.ps1` / `manage.sh`, `deploy/docker/
+  docker-compose.agent.yml`, `.bat` de doble clic en `deploy/docker/`):
+  un solo instalador para Windows y Linux que SIEMPRE pregunta por
+  pantalla (nunca instala con valores por defecto en silencio) si la
+  máquina es **servidor central** o **agente remoto**, los datos de
+  conexión a la base de datos (o genera una contraseña automática si se
+  deja vacío), el puerto del panel, la hora de sincronización y la
+  primera cuenta de super administrador; al final deja un archivo
+  `instalacion_<fecha>.txt` con el resumen de todo lo ingresado
+  (incluidas las contraseñas, con advertencia de que hay que guardarlo
+  en un lugar seguro y borrarlo de ahí). `manage.ps1`/`manage.sh`
+  agregan `start/stop/restart/status` y un `diagnose` nuevo (estado de
+  Docker, de cada contenedor, últimas líneas de log, si PostgreSQL
+  responde y si el panel responde por HTTP) -- pensado para no tener que
+  memorizar comandos de `docker compose` cuando algo "no funciona". A
+  diferencia de los `.bat` de `deploy\windows_server\`, los de Docker NO
+  se auto-elevan a Administrador (Docker Desktop corre con la sesión del
+  usuario, no con SYSTEM). Probado de punta a punta en esta sesión,
+  en modo central y en modo agente, incluidos dos bugs reales que solo
+  aparecieron al correrlo de verdad (no se habrían visto solo leyendo el
+  código): `-d` de `docker compose up -d` lo absorbía PowerShell como
+  abreviación del parámetro común `-Debug` al pasarlo suelto a una
+  función propia, dejando el panel "pegado" en primer plano mostrando
+  logs en vez de desprenderse -- se corrigió pasando los argumentos como
+  un array con nombre; y en `install.sh`, un `if [ -f "$archivo" ]; then
+  ...; fi` sin `else` siempre devuelve éxito (0) aunque la condición sea
+  falsa, así que un `|| valor_por_defecto` después nunca se activaba y
+  `POSTGRES_USER`/`POSTGRES_DB`/`SYNC_DAILY_AT` quedaban vacíos en el
+  `.env` en una instalación nueva (la app no se notaba porque
+  `docker-compose.yml` ya trae sus propios valores por defecto) --
+  se corrigió usando `${variable:-default}` en vez de depender del
+  código de salida de la función.
+- **API con autenticación por token** (`/api/v1/...`, `central/api.py`):
+  para integrar con una app de planillas/tareo externa, sin usar la
+  sesión de navegador de las pantallas humanas. Lectura de empleados,
+  horarios, marcaciones, faltas y tardanzas; escritura (crear/editar)
+  de empleados y horarios, y asignación de horario a un empleado. Los
+  tokens se crean y revocan desde **API** en el menú (solo super admin,
+  `/api-tokens`) con permiso de solo lectura o lectura+escritura; el
+  valor del token se muestra una sola vez, al crearlo. Cada acción por
+  API queda en el log de auditoría como `API:<nombre del token>`, aparte
+  de las acciones humanas. Probado de punta a punta (todas las rutas,
+  token inválido, token revocado, token de solo lectura intentando
+  escribir, actualización parcial que no borra campos no mencionados)
+  con el cliente de pruebas de Flask, y también contra PostgreSQL real
+  en Docker.
+- **Puente para administrar biométricos en sedes remotas**
+  (`central/remote_agent.py`, campo "Agente remoto" en Dispositivos):
+  para un equipo que este servidor no puede alcanzar directo (ej. detrás
+  de otra VPN) pero cuyo propio servidor de sede SÍ llega a la base
+  central. Se instala el mismo código ahí como un agente que sincroniza
+  sus propios dispositivos y ejecuta acciones de administración que la
+  central encola -- por ahora solo "Probar conexión" quedó conectada en
+  ambos lados; el resto (Reiniciar, Apagar, Vaciar, gestión de Usuarios
+  del dispositivo) todavía no, y lo avisa con un mensaje claro en vez de
+  intentar una conexión directa que nunca iba a funcionar. Probado de
+  punta a punta contra un reloj real: un proceso central encoló el
+  comando, un agente remoto simulado lo ejecutó de verdad contra el
+  equipo, y el resultado volvió correctamente.
+- **Despliegue con Docker** (`Dockerfile`, `docker-compose.yml`,
+  `central/sync_loop.py`, ver `deploy/docker/README.md`): tres
+  contenedores (panel web, sincronización, PostgreSQL) que corren igual
+  en Windows y en Ubuntu -- un solo camino de despliegue en vez de
+  mantener el instalador de Windows y el de Linux por separado. Probado
+  de punta a punta contra un PostgreSQL real: arranque de los tres
+  contenedores, creación automática de las tablas, inicio de sesión y
+  todas las pantallas, y conexión real desde dentro del contenedor a un
+  reloj biométrico de la red local sin configuración adicional.
 - **Buscador de DNI en "Sin vincular"**: el desplegable plano de
   empleados (difícil de revisar por DNI en una lista larga) se
   reemplazó por un campo de búsqueda con autocompletado -- se escribe
