@@ -1,0 +1,17 @@
+# Para una sede remota: UN solo servicio (el agente puente, ver
+# central/remote_agent.py), sin PostgreSQL propio -- se conecta al
+# Postgres de la sede central por DATABASE_URL. No es el docker-compose.yml
+# de la raíz del repo (ese es para la central, con web+sync+db) -- se usa
+# con -f, ver deploy/docker/README.md o corre install.ps1/install.sh con
+# "agente" para que lo arme por vos.
+services:
+  agent:
+    build:
+      context: ../..
+    restart: unless-stopped
+    environment:
+      AGENT_NAME: ${AGENT_NAME:?define AGENT_NAME en .env}
+      DATABASE_URL: ${DATABASE_URL:?define DATABASE_URL en .env (cadena de conexión a la base central)}
+      SYNC_DAILY_AT: ${SYNC_DAILY_AT:-23:00}
+      SYNC_INTERVAL_MINUTES: ${SYNC_INTERVAL_MINUTES:-}
+    command: ["python", "-m", "central.remote_agent"]
