@@ -920,7 +920,10 @@ def device_sync_one(device_pk):
             db2.close()
 
     try:
-        count = run_with_hard_timeout(work)
+        result = run_device_op(device_pk, device_name, work, action="sync")
+        # Local: work() ya devuelve el int directo. Remoto: viaja por JSON
+        # como {"new_count": ...} (ver central/remote_agent.py#_run_action).
+        count = result["new_count"] if isinstance(result, dict) else result
         flash(f"'{device_name}' sincronizado: {count} registro(s) nuevo(s).")
     except TimeoutError as e:
         flash(f"'{device_name}': {e}")

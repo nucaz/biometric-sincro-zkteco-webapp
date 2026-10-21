@@ -391,15 +391,43 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
       este proyecto para producción). Quedan validadas por el mismo
       patrón de código ya probado para las otras cinco, no por
       ejecución real.
-    - **Candado (`device_lock.py`) del lado del agente, pendiente**: el
-      agente nunca lo adquiere para `restart`/`poweroff`/etc. (sí para
-      `backup`, indirectamente, porque `_pull_raw_with_retry` ya lo
-      hacía) -- mismo hueco que ya tenía `test` antes de esta sesión,
-      no una regresión nueva, pero vale la pena cerrarlo en algún
-      momento: si el agente corre una sync programada (`_run_sync`)
-      justo cuando llega un comando de `device_commands` para el MISMO
-      dispositivo, ambos podrían abrir una conexión ZK a la vez (el
-      reloj solo acepta una sesión viva).
+    - **Candado (`device_lock.py`) del lado del agente -- cerrado el
+      2026-10-21**: el agente no lo adquiría para `restart`/`poweroff`/
+      `test`/etc. (sí para `backup`, indirectamente, porque
+      `_pull_raw_with_retry` ya lo hacía) -- hueco documentado desde que
+      se agregó el puente, cerrado al mismo tiempo que se sumaron los
+      botones de prueba real a la página de estado (ver más abajo), ya
+      que esa página abre una TERCERA vía de conexión directa al equipo
+      (además de un comando del panel central y la sync programada) y
+      sin candado las tres podían chocar. `_run_action()` ahora envuelve
+      todo el bloque que abre `system.connect()` (todo menos `ping`,
+      `backup` y `sync`, que ya se cuidan solos) en
+      `device_lock.acquire(device.id, ..., owner="remote_agent")` /
+      `release()` -- si dos de las tres vías coinciden en el mismo
+      equipo, la segunda recibe un `DeviceBusy` claro en vez de competir
+      por la única sesión que el reloj acepta.
+    - **Bug real encontrado el 2026-10-21, probando de verdad contra la
+      sede "megaplaza" ya con el agente funcionando**: el botón
+      "Sincronizar este" (`device_sync_one` en `webapp.py`,
+      `/devices/<id>/sync`) nunca había sido retrofitteado -- a
+      diferencia de "Descargar respaldo" (que sí pasa por
+      `run_device_op`), seguía usando `run_with_hard_timeout(work)` a
+      secas, así que para un dispositivo remoto intentaba conectar
+      DIRECTO desde el proceso central a una IP de la LAN de esa sede
+      (nunca alcanzable desde ahí) y se colgaba los 150s completos antes
+      de fallar. El síntoma reportado ("tarda demasiado para traer las
+      marcaciones") tenía toda la pinta de un problema de red del
+      equipo, pero era este bug de retrofit incompleto -- la nota previa
+      de "retrofit completo, ya no queda ninguna acción pendiente" no
+      contempló esta ruta porque es un botón aparte de "Descargar
+      respaldo", fácil de confundir entre sí (los dos sincronizan, pero
+      por rutas de código distintas). Corregido: `device_sync_one` ahora
+      pasa `action="sync"`, y `_run_action()` tiene una rama nueva que
+      llama `central.sync.sync_device()` (la misma función que ya usa la
+      sync local) ANTES del bloque genérico de `system.connect()` --
+      mismo patrón que `backup`, porque `sync_device()` ya administra su
+      propia conexión y candado. Verificado de punta a punta contra el
+      PISO2 real, simulando central + agente en el mismo proceso.
 - **Página de estado del agente remoto** (`central/
   remote_agent_status.py`, levantada desde
   `central/remote_agent.py#_start_status_page()`): página de solo
@@ -413,7 +441,20 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   "¿el agente está vivo? ¿llega a la central? ¿ve mis biométricos ahora
   mismo?" sin VPN ni PowerShell. Sin autenticación a propósito -- mismo
   nivel de confianza que ya tiene esa red local con los biométricos
-  mismos, de solo lectura (ninguna acción destructiva ahí). Se levanta
+  mismos, de solo lectura HACIA EL EQUIPO (nunca reinicia/apaga/vacía/
+  edita usuarios -- eso sigue siendo exclusivo del panel central). Desde
+  el 2026-10-21 también tiene tres botones por dispositivo ("Probar
+  conexión real", "Ver usuarios", "Descargar marcaciones") que SÍ abren
+  una sesión real al reloj (no solo el chequeo TCP de la tabla),
+  reutilizando `central.remote_agent._run_action()` -- la misma función
+  que ya usa el puente para un comando encolado desde la central -- así
+  que comparten el candado (`device_lock.py`) con cualquier comando que
+  llegue por el panel central o con la sync programada, nunca compiten
+  por la única sesión que el reloj acepta. Pensados para cuando el
+  puente central→agente anda lento o falla (como pasó de verdad en esta
+  sesión): corren directo en la LAN de la sede, sin pasar por la cola de
+  `device_commands`, así que sirven para aislar si el problema está en
+  el equipo/la red local o en el puente en sí. Se levanta
   en un hilo de fondo con `waitress.serve()` (mismo servidor WSGI que ya
   usa el panel central nativo, ya en `requirements.txt`) desde
   `remote_agent.py#main()`, sin bloquear el bucle principal de
@@ -480,6 +521,40 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     de vuelta exacto al valor original. Para (a), el mensaje del prompt
     se reescribió aclarando explícitamente que es la contraseña del rol
     de la app, no la del superusuario, y dónde encontrarla.
+  - **Último eslabón de esta misma cadena, encontrado ya con la
+    contraseña correcta y bien codificada**: seguía fallando, pero con
+    `UnicodeDecodeError: 'utf-8' codec can't decode byte ...` en vez del
+    error de host de antes -- PostgreSQL en Windows en español devuelve
+    sus mensajes de error EN ESPAÑOL (con tildes), y `psycopg2`, para un
+    error ocurrido ANTES de que se negocie `client_encoding` (cualquier
+    fallo de conexión/autenticación), asume UTF-8 al decodificar ese
+    mensaje -- si el servidor lo mandó en la codificación de Windows
+    (cp1252), revienta antes de poder mostrar el texto real. Diagnosticado
+    con un script Python de una vez (`psycopg2.connect(...)` envuelto en
+    `try/except UnicodeDecodeError as e: e.object.decode("cp1252",
+    errors="replace")` -- `e.object` trae los bytes crudos que fallaron)
+    que reveló el mensaje real: `no hay una línea en pg_hba.conf para
+    «10.10.10.9», usuario «asistencia», base de datos «asistencia», sin
+    cifrado`. Causa raíz real, sin relación con contraseñas: PostgreSQL
+    tiene su PROPIA lista de control de acceso por IP (`pg_hba.conf`,
+    separada de los usuarios/contraseñas) y una instalación nueva, por
+    defecto, solo permite conexiones desde `127.0.0.1` -- nunca se había
+    notado porque hasta este punto de la sesión el panel central solo se
+    había probado desde la propia central, nunca desde un cliente
+    GENUINAMENTE remoto (la IP de VPN del agente, `10.10.10.9`). El
+    script de migración (`migrar_a_postgresql.ps1`) no toca este archivo
+    -- queda como paso manual documentado acá, no automatizado, porque
+    variar el rango de IP de la VPN es información que solo tiene el
+    usuario (red interna de la empresa), no algo que el script pueda
+    adivinar con seguridad. **Pendiente para cada sede remota nueva**:
+    en el servidor central, agregar a `C:\Program Files\PostgreSQL\
+    <versión>\data\pg_hba.conf` una línea `host asistencia asistencia
+    <rango-de-IP-de-la-VPN> scram-sha-256` (ej. `10.10.10.0/24` si todas
+    las sedes salen por el mismo rango de VPN -- cubre sedes futuras sin
+    tocar el archivo de nuevo) y aplicar con `SELECT pg_reload_conf();`
+    vía `psql` (no hace falta reiniciar el servicio, no corta a nadie
+    conectado). Verificado con el diagnóstico de arriba dando
+    `CONEXION OK` después de agregar la línea.
 - **Instalador y scripts de gestión de Docker** (`deploy/docker/
   install.ps1`/`install.sh`, `manage.ps1`/`manage.sh`,
   `docker-compose.agent.yml`): un instalador interactivo que SIEMPRE
@@ -1080,14 +1155,33 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   superusuario `postgres` puesta donde iba la del rol `asistencia`, y
   el bug de armado de URL sin codificar que habría reventado con
   cualquier contraseña con `@`/`:`, corregida de raíz en los 4 scripts
-  que arman un `DATABASE_URL`). **Pendiente de confirmar por el
-  usuario**: que haya actualizado (`git pull`), vuelto a correr
-  `install_agente_remoto.ps1` con la contraseña CORRECTA del rol
-  `asistencia` (la de `C:\Asistencia\migracion_postgresql_<fecha>.txt`,
-  no la de `postgres`), y que el agente de "sede-megaplaza" haya
-  quedado corriendo de verdad (`State: Running`, no `Ready`) con la
-  página de estado respondiendo en `http://localhost:5050`. **Sin
-  commitear** (sin pedir commit todavía).
+  que arman un `DATABASE_URL`).
+- **2026-10-21: agente de "sede-megaplaza" confirmado corriendo de
+  verdad, y la saga de depuración terminó encontrando dos bugs reales
+  más, no relacionados entre sí**. Después de corregir la contraseña y
+  el `DATABASE_URL`, `LastTaskResult` seguía en `1` -- la causa resultó
+  ser `pg_hba.conf` del servidor central (ver el bullet correspondiente
+  en "Arquitectura y decisiones clave" arriba, incluida la técnica de
+  diagnóstico con `UnicodeDecodeError`/`e.object.decode("cp1252")` para
+  leer un mensaje de error de PostgreSQL en español que normalmente
+  revienta antes de poder mostrarse). Una vez agregada la línea de
+  `pg_hba.conf` para la red de VPN (`10.10.10.0/24`), la tarea quedó
+  `LastTaskResult: 0` y la página de estado respondiendo. Con el agente
+  ya arriba, el usuario probó "Sincronizar"/"Ping"/"Probar conexión"
+  desde el PANEL CENTRAL contra "Megaplaza-Ingreso" y seguían fallando o
+  tardando demasiado -- ahí apareció el bug real de `device_sync_one`
+  nunca retrofitteado para el puente (ver el bullet correspondiente en
+  "Arquitectura y decisiones clave"), corregido y verificado de punta a
+  punta. A pedido del usuario, de paso se maduró la página de estado del
+  agente con tres botones de prueba real (test/usuarios/respaldo) que
+  no dependen del puente -- ver también en "Arquitectura y decisiones
+  clave". **Pendiente de confirmar por el usuario**: hacer `git pull` en
+  la PC del agente y reiniciar la Tarea Programada (`Restart-
+  ScheduledTask -TaskName AsistenciaAgenteRemoto` o reinstalar con
+  `install_agente_remoto.ps1`) para que tome el código nuevo, y
+  confirmar que "Sincronizar"/"Ping"/"Probar conexión" desde el panel
+  central ya funcionan contra "Megaplaza-Ingreso" sin el timeout de
+  150s. **Sin commitear** (sin pedir commit todavía).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

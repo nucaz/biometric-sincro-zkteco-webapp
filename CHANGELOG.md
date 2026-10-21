@@ -41,8 +41,48 @@ para el procedimiento completo de release.
   `<carpeta de instalación>\pagina_estado_error.log`. Verificado
   forzando una falla real (puerto ya ocupado) y confirmando que el
   error completo queda en el archivo.
+- **El botón "Sincronizar este" (`/devices/<id>/sync`) nunca había sido
+  retrofitteado para el puente remoto** -- a diferencia de "Descargar
+  respaldo" (que sí pasa por `run_device_op`), este seguía llamando
+  `run_with_hard_timeout(work)` a secas, así que para un dispositivo de
+  agente remoto intentaba conectar DIRECTO desde el proceso central a
+  una IP de la LAN de esa sede (nunca alcanzable desde ahí) y se quedaba
+  colgado los 150 segundos completos antes de fallar. Encontrado por el
+  usuario probando de verdad contra la sede "megaplaza" ya con el
+  agente funcionando -- el síntoma ("sincronizar tarda demasiado") tenía
+  pinta de problema de red del equipo, pero era este bug de raíz.
+  Corregido: ahora pasa `action="sync"`, y `central/remote_agent.py`
+  tiene una rama nueva que llama `central.sync.sync_device()` (la misma
+  función que ya usa la sincronización local), devolviendo
+  `{"new_count": ...}` por el viaje de ida y vuelta en JSON. Verificado
+  de punta a punta contra el PISO2 real, simulando central + agente.
 
 ### Agregado
+- **La página de estado del agente remoto ahora puede hacer pruebas
+  reales, no solo de red** (`central/remote_agent_status.py`): tres
+  botones nuevos por dispositivo -- "Probar conexión real" (abre una
+  sesión de verdad al equipo, no solo el chequeo TCP que ya hacía),
+  "Ver usuarios" (lista los enrolados en el equipo), y "Descargar
+  marcaciones" (CSV de TODO lo que hay en el equipo ahora mismo, con el
+  mismo dedup-insert a la base central que ya hace "Descargar respaldo"
+  del panel). Los tres reutilizan `central.remote_agent._run_action()`
+  -- la MISMA función que ya usa el puente para un comando llegado del
+  panel central -- así que un clic acá y un comando desde la central no
+  pueden abrir dos sesiones al mismo equipo a la vez sin que el candado
+  compartido (`device_lock.py`) lo note. Pensada para cuando el puente
+  central→agente anda lento o falla: esto corre directo en la LAN de la
+  sede, sin depender de la cola de comandos. Sigue siendo de solo
+  lectura hacia el equipo (nada de reiniciar/apagar/vaciar/editar
+  usuarios -- eso sigue siendo exclusivo del panel central). De paso se
+  cerró un hueco que ya estaba documentado como pendiente: el agente
+  nunca tomaba `device_lock` para sus acciones de conexión directa
+  (test/reiniciar/apagar/vaciar/usuarios) -- ahora si un comando del
+  panel central y un clic en esta página (o la sincronización
+  programada) coinciden en el mismo equipo, el segundo espera su turno
+  en vez de competir por la única sesión que el reloj acepta. Verificado
+  de punta a punta contra el PISO2 real: test, usuarios (148 reales) y
+  respaldo (36,530 marcaciones reales) desde la página de estado, más el
+  caso de un dispositivo de otra sede devolviendo 404.
 - **Puente remoto completo: todas las acciones de dispositivo ya
   funcionan contra un biométrico de agente remoto** (`central/
   remote_agent.py`, `central/webapp.py`): hasta ahora solo "Probar

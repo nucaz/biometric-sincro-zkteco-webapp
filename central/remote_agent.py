@@ -43,9 +43,10 @@ if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
 from attendance_system import ZKTecoAttendance, check_network_reachable  # noqa: E402
+from central import device_lock  # noqa: E402
 from central.db import SessionLocal, init_db  # noqa: E402
 from central.models import Device, DeviceCommand  # noqa: E402
-from central.sync import sync_all, backup_device  # noqa: E402
+from central.sync import sync_all, sync_device, backup_device  # noqa: E402
 from central.sync_loop import _seconds_until  # noqa: E402
 
 COMMAND_POLL_SECONDS = 5
@@ -62,9 +63,17 @@ def _run_action(session, device, action, params):
     key hint, etc.) behaves identically for a local or a remote device.
 
     `session` is this agent's own open SessionLocal (same shared
-    DATABASE_URL as the central app) -- only "backup" needs it, to reuse
-    central.sync.backup_device() exactly as webapp.py's local path would
-    (same dedup-insert into the shared attendance_log)."""
+    DATABASE_URL as the central app) -- "backup" and "sync" need it, to
+    reuse central.sync.backup_device()/sync_device() exactly as
+    webapp.py's local path would (same dedup-insert into the shared
+    attendance_log).
+
+    Called from two places: _process_one() below (a command queued by
+    the central panel) and central/remote_agent_status.py (a button
+    pressed directly on this agent's own local status page, skipping the
+    central bridge entirely -- same function either way, so a device
+    busy with one can't also be hit by the other without the lock below
+    noticing."""
     if action == "ping":
         # Pure TCP reachability -- no ZK handshake, mirrors device_ping's
         # local check_network_reachable() call. Doesn't open a pyzk
@@ -81,42 +90,60 @@ def _run_action(session, device, action, params):
         rows = [] if raw is None else json.loads(raw.to_json(orient="records", date_format="iso"))
         return {"rows": rows, "new_count": new_count}
 
-    system = ZKTecoAttendance(device.ip, port=device.port, password=device.comm_password or 0)
-    system.connect()
-    if not system.conn:
-        return None
+    if action == "sync":
+        # Same idea as "backup" -- sync_device() already manages its own
+        # connection + device_lock via _pull_raw_with_retry, so this also
+        # goes before the generic block. Mirrors webapp.py's
+        # device_sync_one ("Sincronizar este" button) for a local device.
+        new_count = sync_device(session, device)
+        return {"new_count": new_count}
+
+    # Every action below opens its OWN direct pyzk connection, unlike
+    # "backup"/"sync" above -- needs the same device_lock those already
+    # get indirectly, or a command queued from the central panel could
+    # collide with a scheduled _run_sync() or a click on this agent's own
+    # local status page landing on the same device at the same moment
+    # (the device only accepts one live session).
+    device_lock.acquire(device.id, device.name, owner="remote_agent")
     try:
-        if action == "test":
-            return {
-                "model": system.device_info.get("model", "").strip(),
-                "serial": system.device_info.get("serial_number", "").strip(),
-            }
-        if action == "restart":
-            system.restart_device()
+        system = ZKTecoAttendance(device.ip, port=device.port, password=device.comm_password or 0)
+        system.connect()
+        if not system.conn:
             return None
-        if action == "poweroff":
-            system.poweroff_device()
-            return None
-        if action == "clear_attendance":
-            system.clear_attendance_log()
-            return None
-        if action == "list_users":
-            return system.list_device_users()
-        if action == "get_user":
-            user_id = str(params["user_id"])
-            return next((u for u in system.list_device_users() if str(u["user_id"]) == user_id), None)
-        if action == "create_or_update_user":
-            return system.create_or_update_user(
-                user_id=params["user_id"], name=params["name"],
-                privilege=params.get("privilege", 0),
-                card=params.get("card", 0), password=params.get("password"),
-            )
-        if action == "delete_user":
-            system.delete_device_user(params["user_id"])
-            return None
-        raise ValueError(f"Acción desconocida para el agente remoto: '{action}'.")
+        try:
+            if action == "test":
+                return {
+                    "model": system.device_info.get("model", "").strip(),
+                    "serial": system.device_info.get("serial_number", "").strip(),
+                }
+            if action == "restart":
+                system.restart_device()
+                return None
+            if action == "poweroff":
+                system.poweroff_device()
+                return None
+            if action == "clear_attendance":
+                system.clear_attendance_log()
+                return None
+            if action == "list_users":
+                return system.list_device_users()
+            if action == "get_user":
+                user_id = str(params["user_id"])
+                return next((u for u in system.list_device_users() if str(u["user_id"]) == user_id), None)
+            if action == "create_or_update_user":
+                return system.create_or_update_user(
+                    user_id=params["user_id"], name=params["name"],
+                    privilege=params.get("privilege", 0),
+                    card=params.get("card", 0), password=params.get("password"),
+                )
+            if action == "delete_user":
+                system.delete_device_user(params["user_id"])
+                return None
+            raise ValueError(f"Acción desconocida para el agente remoto: '{action}'.")
+        finally:
+            system.disconnect()
     finally:
-        system.disconnect()
+        device_lock.release(device.id)
 
 
 def _process_one(session, cmd):
