@@ -97,12 +97,14 @@ $AgentName = Read-Required "Nombre de este agente (ej. sede-pueblo-libre)"
 
 Write-Host ""
 Write-Host "--- Conexión a la base de datos del servidor central ---" -ForegroundColor Cyan
-Write-Host "(Evita '@' y ':' en la contraseña -- forman parte de la URL de conexión y la romperían.)" -ForegroundColor DarkGray
+Write-Host "Es la contraseña del USUARIO DE LA APP (ej. 'asistencia'), NO la del" -ForegroundColor DarkGray
+Write-Host "superusuario 'postgres' -- está en el servidor central, en" -ForegroundColor DarkGray
+Write-Host "C:\Asistencia\migracion_postgresql_<fecha>.txt, línea 'Contraseña de base de datos'." -ForegroundColor DarkGray
 $CentralHost = Read-Required "IP o DNS del servidor central"
 $CentralPort = Read-WithDefault "Puerto de PostgreSQL en el servidor central" "5432"
 $CentralDb = Read-WithDefault "Nombre de la base de datos central" "asistencia"
 $CentralUser = Read-WithDefault "Usuario de la base de datos central" "asistencia"
-$CentralPassword = Read-Required "Contraseña de la base de datos central (la misma que tiene el servidor central)"
+$CentralPassword = Read-Required "Contraseña de ese usuario en la base de datos central"
 
 Write-Host ""
 Write-Host "--- Sincronización automática de los biométricos de esta sede ---" -ForegroundColor Cyan
@@ -114,7 +116,14 @@ Write-Host "Una página de solo lectura en esta misma PC para confirmar que el a
 Write-Host "está vivo y si llega a los biométricos de esta sede, sin PowerShell ni VPN." -ForegroundColor DarkGray
 $AgentStatusPort = Read-WithDefault "Puerto para la página de estado (vacío o 0 para desactivarla)" "5050"
 
-$DatabaseUrl = "postgresql+psycopg2://${CentralUser}:${CentralPassword}@${CentralHost}:${CentralPort}/${CentralDb}"
+# Codificar usuario/contraseña para la URL (RFC 3986) -- sin esto, un
+# "@", ":" o "/" dentro de la contraseña (algo totalmente normal, y pasó
+# de verdad en esta sesión: una contraseña con "@" partía la URL en el
+# lugar equivocado) arma un DATABASE_URL roto en silencio, con un error
+# de conexión después que no dice nada sobre la causa real.
+$CentralUserEnc = [System.Uri]::EscapeDataString($CentralUser)
+$CentralPasswordEnc = [System.Uri]::EscapeDataString($CentralPassword)
+$DatabaseUrl = "postgresql+psycopg2://${CentralUserEnc}:${CentralPasswordEnc}@${CentralHost}:${CentralPort}/${CentralDb}"
 
 $SourceDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Write-Host "`nCopiando la aplicación a $InstallDir..." -ForegroundColor Cyan

@@ -448,6 +448,38 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     uno fuera de rango permitido -- motivo más para loguear el
     traceback completo en vez de intentar adivinar la causa por el tipo
     de excepción.
+  - **Causa raíz real, encontrada DESPUÉS del bug #1**: el bug #1 (logging
+    de errores) era necesario pero no suficiente -- `pagina_estado_error.log`
+    ni siquiera llegaba a crearse, porque el proceso entero de
+    `central.remote_agent` se caía ANTES, en `init_db()` (la primerísima
+    línea de `main()`), con `Get-ScheduledTaskInfo` mostrando
+    `State: Ready` (no `Running`) y `LastTaskResult: 1`. Encontrado
+    corriendo el módulo directo en una consola visible (`python.exe -m
+    central.remote_agent`, sin la Tarea Programada de por medio) --
+    técnica clave para diagnosticar cualquier falla de una Tarea
+    Programada sin consola: psycopg2 no podía resolver el host
+    `"#SisDepil26@172.16.1.233"` -- la contraseña real que el usuario
+    tenía (`@#SisDepil26`, la del superusuario `postgres`, que además
+    **ni siquiera era la contraseña correcta para esto** -- ver el bug
+    de la URL más abajo) tiene un `@` adentro, y el script avisaba
+    "evitá `@` y `:`" pero igual se usó, armando un `DATABASE_URL`
+    partido en el lugar equivocado. Doble problema en uno: (a) el
+    usuario había puesto la contraseña del superusuario `postgres` en
+    vez de la del rol `asistencia` (están en `C:\Asistencia\
+    migracion_postgresql_<fecha>.txt`, en líneas DISTINTAS -- la del
+    superusuario no se loguea ahí a propósito, solo se usa una vez para
+    crear el rol), y (b) aunque hubiera puesto la contraseña correcta,
+    si esa tuviera `@`/`:` el mismo bug de armado de URL habría
+    reventado igual. Corregido (b) de raíz: `install_agente_remoto.ps1`,
+    `migrar_a_postgresql.ps1`, y los equivalentes de Docker
+    (`deploy/docker/install.ps1`, `install.sh`,
+    `migrar_servidor_central.ps1`) ahora codifican usuario/contraseña
+    para la URL (RFC 3986) en vez de solo avisar y confiar en que nadie
+    use esos caracteres -- verificado que `@#SisDepil26` codifica a
+    `%40%23SisDepil26` y que `sqlalchemy.engine.make_url()` lo decodifica
+    de vuelta exacto al valor original. Para (a), el mensaje del prompt
+    se reescribió aclarando explícitamente que es la contraseña del rol
+    de la app, no la del superusuario, y dónde encontrarla.
 - **Instalador y scripts de gestión de Docker** (`deploy/docker/
   install.ps1`/`install.sh`, `manage.ps1`/`manage.sh`,
   `docker-compose.agent.yml`): un instalador interactivo que SIEMPRE
@@ -1033,13 +1065,29 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   un bug de ruteo del puente). Corregido el problema de la página de
   estado (ver el bullet correspondiente en "Arquitectura y decisiones
   clave" arriba -- faltaba manejo de errores, ahora escribe
-  `pagina_estado_error.log`). **Pendiente de confirmar por el usuario**:
-  (a) si la PC donde está instalado el agente está en la misma red
-  (192.168.1.x) que el biométrico `Megaplaza-Ingreso`, o si el software
-  ZKTeco de escritorio que SÍ se conectó corre en una PC distinta de esa
-  sede; (b) si 5050 cae en un rango de puertos excluido de Windows
-  (`netsh interface ipv4 show excludedportrange protocol=tcp`) en esa
-  máquina real. **Sin commitear** (sin pedir commit todavía).
+  `pagina_estado_error.log`). Las preguntas de red/puerto quedaron sin
+  objeto: `netstat`/`netsh` del usuario confirmaron que ninguna de las
+  dos explicaba nada (5050 no está en ningún rango excluido, y lo único
+  en ese puerto era UDP de otro programa, que no choca con TCP).
+- **2026-10-21: causa raíz real encontrada -- contraseña con `@` rompía
+  el `DATABASE_URL` del agente, Y además era la contraseña equivocada**.
+  Diagnosticado corriendo `central.remote_agent` directo en consola
+  (`python.exe -m central.remote_agent`, sin la Tarea Programada) --
+  ahí apareció el traceback real: `init_db()` fallaba al conectar,
+  psycopg2 no podía resolver `"#SisDepil26@172.16.1.233"` como host.
+  Ver el bullet correspondiente en "Arquitectura y decisiones clave"
+  arriba para el detalle completo (dos problemas en uno: contraseña del
+  superusuario `postgres` puesta donde iba la del rol `asistencia`, y
+  el bug de armado de URL sin codificar que habría reventado con
+  cualquier contraseña con `@`/`:`, corregida de raíz en los 4 scripts
+  que arman un `DATABASE_URL`). **Pendiente de confirmar por el
+  usuario**: que haya actualizado (`git pull`), vuelto a correr
+  `install_agente_remoto.ps1` con la contraseña CORRECTA del rol
+  `asistencia` (la de `C:\Asistencia\migracion_postgresql_<fecha>.txt`,
+  no la de `postgres`), y que el agente de "sede-megaplaza" haya
+  quedado corriendo de verdad (`State: Running`, no `Ready`) con la
+  página de estado respondiendo en `http://localhost:5050`. **Sin
+  commitear** (sin pedir commit todavía).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

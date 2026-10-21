@@ -189,7 +189,9 @@ if ($LASTEXITCODE -ne 0) {
 }
 
 Write-Host "`nMigrando los datos reales (esto puede tardar si hay muchas marcaciones)..." -ForegroundColor Cyan
-$env:DATABASE_URL = "postgresql+psycopg2://${PgUser}:${PgPassword}@localhost:${PgPort}/${PgDb}"
+$PgUserEnc = [System.Uri]::EscapeDataString($PgUser)
+$PgPasswordEnc = [System.Uri]::EscapeDataString($PgPassword)
+$env:DATABASE_URL = "postgresql+psycopg2://${PgUserEnc}:${PgPasswordEnc}@localhost:${PgPort}/${PgDb}"
 Push-Location $RepoRoot
 try {
     & $NativePython -m central.migrate_sqlite_to_postgres --sqlite $BackupPath --yes

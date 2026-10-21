@@ -38,6 +38,22 @@ random_secret() {
     openssl rand -base64 32
 }
 
+urlencode() {
+    # Codifica para armar un DATABASE_URL (RFC 3986) -- sin esto, un
+    # "@"/":" sin codificar dentro de un usuario/contraseña tipeado a
+    # mano rompe la URL en silencio (visto de verdad en
+    # install_agente_remoto.ps1, la versión de Windows, esta sesión).
+    local string="$1" length="${#1}" c o
+    for (( pos=0; pos<length; pos++ )); do
+        c="${string:$pos:1}"
+        case "$c" in
+            [-_.~a-zA-Z0-9]) o="$c" ;;
+            *) printf -v o '%%%02X' "'$c" ;;
+        esac
+        printf '%s' "$o"
+    done
+}
+
 read_existing_env_value() {
     # Nunca falla (sale con 0 e imprime "" si no hay nada que encontrar) --
     # a propósito, porque "if [ -f ... ]; then ...; fi" sin "else" devuelve
@@ -199,7 +215,6 @@ else
     CENTRAL_PORT=$(prompt_with_default "Puerto de PostgreSQL en el servidor central" "5432")
     CENTRAL_DB=$(prompt_with_default "Nombre de la base de datos central" "asistencia")
     CENTRAL_USER=$(prompt_with_default "Usuario de la base de datos central" "asistencia")
-    echo "(Evita '@' y ':' en esta contraseña -- forman parte de la URL de conexión y la romperían. Las generadas automáticamente por este instalador nunca los usan.)"
     CENTRAL_PASSWORD=$(prompt_required "Contraseña de la base de datos central (la misma que tiene el servidor central)")
 
     echo ""
@@ -207,7 +222,7 @@ else
     _existing_sync_at="$(read_existing_env_value "$ENV_PATH" SYNC_DAILY_AT)"
     SYNC_DAILY_AT=$(prompt_with_default "Hora diaria de sincronización (HH:mm)" "${_existing_sync_at:-23:00}")
 
-    DATABASE_URL="postgresql+psycopg2://${CENTRAL_USER}:${CENTRAL_PASSWORD}@${CENTRAL_HOST}:${CENTRAL_PORT}/${CENTRAL_DB}"
+    DATABASE_URL="postgresql+psycopg2://$(urlencode "$CENTRAL_USER"):$(urlencode "$CENTRAL_PASSWORD")@${CENTRAL_HOST}:${CENTRAL_PORT}/${CENTRAL_DB}"
     cat > "$ENV_PATH" <<EOF
 AGENT_NAME=$AGENT_NAME
 DATABASE_URL=$DATABASE_URL

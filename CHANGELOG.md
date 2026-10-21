@@ -12,6 +12,22 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Corregido
+- **Una contraseña con `@` o `:` rompía en silencio el `DATABASE_URL`
+  armado por los instaladores** (`install_agente_remoto.ps1`,
+  `migrar_a_postgresql.ps1`, y los equivalentes de Docker) -- esos
+  caracteres son parte de la sintaxis de la URL de conexión, así que un
+  `@` DENTRO de la contraseña partía la URL en el lugar equivocado. El
+  síntoma era un error de SQLAlchemy/psycopg2 totalmente confuso ("no se
+  pudo traducir el nombre de host") en vez de un error claro de
+  conexión -- pasó de verdad con una contraseña real del usuario que
+  tenía un `@`. Los scripts ya avisaban "evitá `@` y `:`", pero eso no
+  alcanza (nadie debería tener que recordar evitar caracteres válidos en
+  una contraseña). Corregido codificando usuario y contraseña para la
+  URL (RFC 3986, `[System.Uri]::EscapeDataString()` en PowerShell, una
+  función `urlencode` nueva en `install.sh`) -- ahora cualquier
+  contraseña funciona, con cualquier carácter. Verificado con la
+  contraseña real que causó el problema: codifica a `%40%23...` y
+  SQLAlchemy la decodifica de vuelta exacta al valor original.
 - **La página de estado del agente remoto podía fallar al arrancar sin
   dejar ningún rastro** -- corre en un hilo de fondo dentro de una Tarea
   Programada sin consola visible, así que si `waitress.serve()` fallaba

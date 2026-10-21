@@ -216,7 +216,12 @@ SYNC_INTERVAL_MINUTES=
     Write-Host "--- Sincronización automática de los biométricos de esta sede ---" -ForegroundColor Cyan
     $SyncDailyAt = Read-WithDefault "Hora diaria de sincronización (HH:mm)" (Get-OrDefault $existing "SYNC_DAILY_AT" "23:00")
 
-    $DatabaseUrl = "postgresql+psycopg2://${CentralUser}:${CentralPassword}@${CentralHost}:${CentralPort}/${CentralDb}"
+    # Codificar usuario/contraseña para la URL (RFC 3986) -- un "@"/":"
+    # sin codificar dentro de la contraseña rompe el DATABASE_URL en
+    # silencio (visto de verdad en install_agente_remoto.ps1).
+    $CentralUserEnc = [System.Uri]::EscapeDataString($CentralUser)
+    $CentralPasswordEnc = [System.Uri]::EscapeDataString($CentralPassword)
+    $DatabaseUrl = "postgresql+psycopg2://${CentralUserEnc}:${CentralPasswordEnc}@${CentralHost}:${CentralPort}/${CentralDb}"
     $EnvContent = @"
 AGENT_NAME=$AgentName
 DATABASE_URL=$DatabaseUrl

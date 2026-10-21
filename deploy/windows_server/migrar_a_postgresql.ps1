@@ -226,7 +226,13 @@ foreach ($suffix in @("-wal", "-shm")) {
 }
 Write-Host "Respaldo listo. GUARDALO -- no lo borres hasta confirmar que todo quedó bien." -ForegroundColor Green
 
-$DatabaseUrl = "postgresql+psycopg2://${PgUser}:${PgPassword}@localhost:${PgPort}/${PgDb}"
+# Codificar usuario/contraseña para la URL (RFC 3986) -- la generada
+# automática (Base64) nunca tiene "@"/":" así que nunca rompía esto,
+# pero si alguien tipea su propia contraseña acá sí podría tenerlos
+# (visto de verdad en install_agente_remoto.ps1 esta misma sesión).
+$PgUserEnc = [System.Uri]::EscapeDataString($PgUser)
+$PgPasswordEnc = [System.Uri]::EscapeDataString($PgPassword)
+$DatabaseUrl = "postgresql+psycopg2://${PgUserEnc}:${PgPasswordEnc}@localhost:${PgPort}/${PgDb}"
 $NativePython = Join-Path $InstallDir "venv\Scripts\python.exe"
 if (-not (Test-Path $NativePython)) { throw "No se encontró $NativePython -- ¿está bien instalado el panel en $InstallDir?" }
 
