@@ -38,9 +38,22 @@ param(
 
 $ErrorActionPreference = "Continue"  # native commands log to stderr; check exit codes explicitly instead
 
-function Assert-CommandExists($name, $hint) {
-    if (-not (Get-Command $name -ErrorAction SilentlyContinue)) {
-        throw "$name no está disponible en PATH. $hint"
+function Assert-RealPython {
+    # Windows pone un "alias de ejecución de aplicaciones" en PATH
+    # (%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe) que Get-Command
+    # encuentra igual que un Python real, pero al correrlo solo abre la
+    # Microsoft Store y no hace nada -- "¿existe el comando?" no alcanza,
+    # hay que confirmar que de verdad ejecuta código (visto de verdad en
+    # deploy\windows_server\install_agente_remoto.ps1 esta misma sesión:
+    # pasó este chequeo con el nombre viejo, y terminó registrando una
+    # Tarea Programada apuntando a un venv\Scripts\python.exe que nunca
+    # se creó).
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        throw "python no está disponible en PATH. Instalá Python 3.10+ desde https://www.python.org/downloads/windows/ (marcá 'Add python.exe to PATH') y volvé a correr este script."
+    }
+    $versionOutput = & python --version 2>&1
+    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "^Python \d") {
+        throw "El 'python' que encuentra PATH no es una instalación real -- probablemente es el acceso directo de la Microsoft Store de Windows (salida: '$versionOutput'). Instalá Python 3.10+ de verdad desde https://www.python.org/downloads/windows/ (marcá 'Add python.exe to PATH'). Si ya lo instalaste y seguís viendo esto, desactivá el alias en Configuración > Aplicaciones > Configuración avanzada de aplicaciones > Alias de ejecución de aplicaciones (apagá 'python.exe' y 'python3.exe') y volvé a abrir la consola."
     }
 }
 
@@ -49,7 +62,7 @@ if (-not $IsAdmin) {
     Write-Warning "No estás en una PowerShell elevada. La app y la base de datos se van a preparar igual, pero registrar las tareas programadas (lo que de verdad deja el servicio corriendo) va a fallar al final. Vuelve a correr este script como Administrador para completarlo."
 }
 
-Assert-CommandExists "python" "Instala Python 3.10+ desde https://www.python.org/downloads/windows/ (marca 'Add python.exe to PATH') y vuelve a correr este script."
+Assert-RealPython
 
 $SourceDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
 Write-Host "Copiando la aplicación a $InstallDir..." -ForegroundColor Cyan
@@ -68,6 +81,9 @@ try {
     if (-not (Test-Path "venv")) {
         Write-Host "Creando entorno virtual..." -ForegroundColor Cyan
         python -m venv venv
+    }
+    if (-not (Test-Path ".\venv\Scripts\python.exe")) {
+        throw "No se creó .\venv\Scripts\python.exe -- la instalación de Python no quedó bien (ver el chequeo de arriba)."
     }
     Write-Host "Instalando dependencias..." -ForegroundColor Cyan
     # python -m pip, not pip.exe directly -- pip.exe can't reliably upgrade

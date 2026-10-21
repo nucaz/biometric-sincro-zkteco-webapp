@@ -72,6 +72,27 @@ para el procedimiento completo de release.
   chocar), y la aplicación arrancó normal contra la base ya migrada.
 
 ### Corregido
+- **`install_agente_remoto.ps1` e `install.ps1` no detectaban el "alias
+  de ejecución de aplicaciones" falso de `python` en Windows** -- el
+  `python.exe` que Windows pone en PATH por defecto
+  (`%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe`) resuelve igual que
+  un Python real para `Get-Command`, pero al ejecutarlo solo abre la
+  Microsoft Store y no hace nada. El chequeo de "¿existe el comando
+  python?" pasaba igual, `python -m venv venv` no creaba nada, y el
+  resto del instalador seguía adelante sin darse cuenta -- en el caso
+  real del usuario, terminó registrando e iniciando la Tarea Programada
+  del agente remoto apuntando a un `venv\Scripts\python.exe` que nunca
+  se creó, y mostrando "=== Listo ===" como si hubiera funcionado.
+  Corregido: ahora se confirma que `python --version` de verdad
+  responde con un número de versión (no solo que el comando "existe"),
+  y además se verifica explícitamente que `venv\Scripts\python.exe`
+  quedó creado antes de registrar la Tarea Programada -- si cualquiera
+  de los dos falla, el script para con un mensaje claro en vez de
+  reportar éxito falso. Verificado reproduciendo el alias falso con un
+  script de prueba que imita su comportamiento exacto (mismo mensaje,
+  mismo código de salida) y confirmando que la detección nueva lo
+  atrapa, mientras que una instalación de Python real sigue pasando sin
+  problema.
 - **`migrar_a_postgresql.ps1` no detectaba un `robocopy` que fallara en
   silencio** -- el código de salida de `robocopy` nunca se revisaba (sus
   códigos son por bits: 0-7 éxito/informativo, 8+ error real, no el

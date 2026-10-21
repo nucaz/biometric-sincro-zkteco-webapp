@@ -505,6 +505,46 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     Programada y el ciclo completo Start/Stop/Restart sobre una tarea
     real -- mismo tipo de limitación ya documentada para
     `migrar_servidor_central.ps1`.
+  - **Bug real #5, encontrado por el usuario desplegando el agente de
+    verdad en la sede remota** (2026-10-21, VPN y PostgreSQL ya
+    confirmados accesibles con `Test-NetConnection` --
+    `TcpTestSucceeded: True`): el chequeo original (`Assert-CommandExists
+    "python" ...`, con `Get-Command python -ErrorAction SilentlyContinue`)
+    pasaba igual contra el "alias de ejecución de aplicaciones" que
+    Windows pone en PATH por defecto
+    (`%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe`) -- ese archivo
+    EXISTE de verdad (por eso `Get-Command` lo encuentra), pero al
+    ejecutarlo solo abre la Microsoft Store y sale, sin hacer nada. El
+    script pasó el chequeo, `python -m venv venv` no creó nada, y como
+    nada de lo que seguía revisaba códigos de salida, el instalador
+    siguió hasta el final: configuró las variables de entorno, registró
+    la Tarea Programada apuntando a un `venv\Scripts\python.exe`
+    inexistente, la "inició", y mostró `=== Listo ===` -- un falso
+    éxito completo, el agente nunca llegó a correr. Corregido con
+    `Assert-RealPython` (nueva función, reemplaza `Assert-CommandExists`
+    para python específicamente, en ESTE script Y en
+    `deploy\windows_server\install.ps1` -- mismo patrón original, misma
+    vulnerabilidad, corregido ahí también aunque no fue lo que bloqueó
+    al usuario esta vez): corre `python --version` de verdad y exige que
+    la salida empiece con `Python ` seguido de un número, no solo que el
+    comando "exista". Segunda capa de protección agregada en ambos
+    scripts: verificación explícita de `Test-Path
+    ...\venv\Scripts\python.exe` ANTES de registrar la Tarea
+    Programada -- si por cualquier motivo el venv no quedó usable (no
+    solo Python roto -- antivirus, disco lleno, etc.), el script para
+    con un mensaje claro en vez de declarar éxito falso otra vez.
+    Verificado con un script de prueba que imita el comportamiento
+    exacto del alias falso (mismo mensaje de Microsoft Store, mismo
+    código de salida) -- confirmó que la detección nueva lo atrapa, y
+    que una instalación de Python real (la de esta PC de dev) sigue
+    pasando sin problema. **El usuario todavía tiene que**: instalar
+    Python 3.10+ real en esa PC remota (python.org, marcando "Add
+    python.exe to PATH"; si sigue sin andar después de instalarlo,
+    puede que el alias de WindowsApps siga adelante en PATH --
+    desactivarlo en Configuración > Aplicaciones > Alias de ejecución de
+    aplicaciones) y volver a correr `install_agente_remoto.ps1` -- no
+    hace falta limpiar la Tarea Programada rota a mano, `Register-
+    ScheduledTask -Force` la reemplaza sola.
 - **Migración a PostgreSQL SIN Docker en la central**
   (`deploy/windows_server/migrar_a_postgresql.ps1`): resultó que el
   servidor central TAMPOCO puede correr Docker -- es una VM de Hyper-V
@@ -811,6 +851,23 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   el panel nativo sigue ahí sin tocar, nada se perdió en ningún
   intento). Si sigue fallando después de mover el repo, revisar también
   si hay antivirus/Windows Defender interfiriendo con la copia.
+- **2026-10-21: central migrada a PostgreSQL con éxito, confirmado por
+  el usuario** ("ya realice el despliegue y migración a postgresql, y
+  probé el acceso a la aplicación") -- el bug #4 de arriba quedó
+  resuelto en la práctica (no está confirmado si fue mover el repo, el
+  fix del código, o ambos, pero el resultado final funcionó). Pasando al
+  despliegue del agente remoto en la sede "megaplaza": VPN y PostgreSQL
+  de la central confirmados accesibles desde la PC remota
+  (`Test-NetConnection` con `TcpTestSucceeded: True`, la central ya
+  tiene el puerto abierto). Encontrado y corregido el **bug real #5**
+  (alias de ejecución de `python` de Windows, ver el detalle completo en
+  "Arquitectura y decisiones clave" arriba) -- el primer intento de
+  `install_agente_remoto.ps1` ahí registró una Tarea Programada rota sin
+  que el usuario se enterara (mostró "Listo" con el agente en realidad
+  caído). **Pendiente de confirmar**: que el usuario haya instalado
+  Python real en esa PC remota y vuelto a correr el instalador con el
+  fix -- recién ahí el agente de "sede-megaplaza" queda operativo de
+  verdad. **Sin commitear** (sin pedir commit todavía).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

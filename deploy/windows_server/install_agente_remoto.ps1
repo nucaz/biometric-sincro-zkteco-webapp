@@ -46,6 +46,26 @@ function Assert-CommandExists($name, $hint) {
     }
 }
 
+function Assert-RealPython {
+    # Windows pone un "alias de ejecución de aplicaciones" en PATH
+    # (%LOCALAPPDATA%\Microsoft\WindowsApps\python.exe) que Get-Command
+    # encuentra igual que un Python real -- pero al correrlo solo abre
+    # la Microsoft Store y no hace nada. Visto en esta sesión: pasó el
+    # chequeo de "¿existe el comando?", pero "python -m venv venv" no
+    # creó nada, y el resto del instalador siguió adelante sin darse
+    # cuenta, hasta terminar registrando una Tarea Programada que apunta
+    # a un venv\Scripts\python.exe que nunca existió. Por eso acá no
+    # alcanza con "¿existe el comando?", hay que confirmar que de
+    # verdad ejecuta código.
+    if (-not (Get-Command python -ErrorAction SilentlyContinue)) {
+        throw "python no está disponible en PATH. Instalá Python 3.10+ desde https://www.python.org/downloads/windows/ (marcá 'Add python.exe to PATH') y volvé a correr este script."
+    }
+    $versionOutput = & python --version 2>&1
+    if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch "^Python \d") {
+        throw "El 'python' que encuentra PATH no es una instalación real -- probablemente es el acceso directo de la Microsoft Store de Windows (salida: '$versionOutput'). Instalá Python 3.10+ de verdad desde https://www.python.org/downloads/windows/ (marcá 'Add python.exe to PATH'). Si ya lo instalaste y seguís viendo esto, desactivá el alias en Configuración > Aplicaciones > Configuración avanzada de aplicaciones > Alias de ejecución de aplicaciones (apagá 'python.exe' y 'python3.exe') y volvé a abrir la consola."
+    }
+}
+
 function Read-WithDefault([string]$Prompt, [string]$Default) {
     $suffix = if ($Default) { " [$Default]" } else { "" }
     $value = Read-Host "$Prompt$suffix"
@@ -66,7 +86,7 @@ if (-not $IsAdmin) {
     Write-Warning "No estás en una PowerShell elevada. La app se va a preparar igual, pero registrar la Tarea Programada (lo que de verdad deja el agente corriendo) va a fallar al final. Vuelve a correr este script como Administrador para completarlo."
 }
 
-Assert-CommandExists "python" "Instala Python 3.10+ desde https://www.python.org/downloads/windows/ (marca 'Add python.exe to PATH') y vuelve a correr este script."
+Assert-RealPython
 
 Write-Host "=== Instalador del agente remoto (sin Docker) ===" -ForegroundColor White
 Write-Host ""
@@ -103,11 +123,25 @@ try {
         Write-Host "Creando entorno virtual..." -ForegroundColor Cyan
         python -m venv venv
     }
+    if (-not (Test-Path ".\venv\Scripts\python.exe")) {
+        throw "No se creó .\venv\Scripts\python.exe -- la instalación de Python no quedó bien (ver el chequeo de arriba)."
+    }
     Write-Host "Instalando dependencias..." -ForegroundColor Cyan
     & ".\venv\Scripts\python.exe" -m pip install --upgrade pip -q
     & ".\venv\Scripts\python.exe" -m pip install -q -r "central\requirements.txt"
+    if ($LASTEXITCODE -ne 0) { throw "pip install falló (código $LASTEXITCODE) -- revisá el mensaje de arriba antes de seguir." }
 } finally {
     Pop-Location
+}
+
+# Segunda capa de protección, antes de registrar la Tarea Programada --
+# si por cualquier motivo el venv no quedó usable (no solo "python" roto,
+# también antivirus bloqueando la copia, disco lleno, etc.), más vale
+# parar acá con un mensaje claro que registrar una tarea apuntando a un
+# ejecutable que no existe y decir "Listo" igual (pasó de verdad en esta
+# sesión).
+if (-not (Test-Path "$InstallDir\venv\Scripts\python.exe")) {
+    throw "$InstallDir\venv\Scripts\python.exe no existe -- no se puede registrar la Tarea Programada. Revisá los mensajes de arriba antes de volver a intentar."
 }
 
 if ($IsAdmin) {
