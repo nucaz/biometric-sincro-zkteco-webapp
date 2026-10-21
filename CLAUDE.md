@@ -314,6 +314,119 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   (local, el comportamiento de toda la vida) vs. `== only_agent`, así
   que la central nunca intenta (ni falla contra) un dispositivo que un
   agente remoto ya es dueño.
+  - **2026-10-21: retrofit completo de todas las acciones** -- ya no
+    queda ninguna pendiente (antes solo "test"/Probar conexión estaba
+    conectada). `_run_action()` ahora dispatchea `ping`, `restart`,
+    `poweroff`, `clear_attendance`, `list_users`, `get_user`,
+    `create_or_update_user`, `delete_user` y `backup` -- mismo patrón:
+    un `if action == "..."` por cada uno, llamando el mismo método de
+    `attendance_system.ZKTecoAttendance` que ya usaba el `work()` local
+    de cada ruta en `webapp.py`. Cada ruta de `webapp.py` que antes
+    llamaba `run_device_op(device_pk, device_name, work)` a secas ahora
+    pasa `action="..."` (y `params={...}` cuando hace falta, ej.
+    `user_id`/`name`/`privilege`/`card`/`password` para usuarios) -- el
+    `work()` LOCAL queda intacto en todas, porque `run_device_op` sigue
+    usándolo tal cual para un dispositivo sin agente.
+    - **`password` en `create_or_update_user` tiene que viajar como la
+      cadena tal cual, NUNCA `texto or None`** -- `''` (campo dejado en
+      blanco en el formulario) significa "borrar el PIN del equipo"
+      (ver el comentario de `create_or_update_user` en
+      `attendance_system.py`), mientras que `None` significa otra cosa
+      ("dejar el que ya tenía"). `password or None` convertiría
+      silenciosamente un "borrar" en un "no tocar" -- doble trampa
+      porque es exactamente el mismo bug de `password=''` por defecto
+      que ya está documentado en `create_or_update_user` mismo, pero
+      acá en el punto donde se arma el diccionario `params` para el
+      puente, no en la función en sí.
+    - **`device_ping` no pasaba por `run_device_op` en absoluto** antes
+      de este cambio -- hacía `check_network_reachable()` directo desde
+      el proceso central, que para un dispositivo remoto SIEMPRE
+      reportaba "no responde" en falso (la IP es de la LAN de esa sede,
+      nunca alcanzable desde la central) sin ningún aviso de por qué.
+      Reestructurado para seguir EXACTAMENTE el patrón de `device_test`
+      (`work()` + `run_device_op(..., action="ping")` siempre, sin
+      bifurcar en el propio route según `agent_name` -- es
+      `run_device_op` quien decide local vs. remoto, no el caller).
+    - **`device_backup` tampoco pasaba por `run_device_op`** -- usaba
+      `run_with_hard_timeout(work)` directo, y `work()` llamaba
+      `central.sync.backup_device(db2, device)` que abre su PROPIA
+      conexión (vía `_pull_raw_with_retry`), así que para un
+      dispositivo remoto se habría colgado 150s intentando conectar
+      directo. Es el retrofit más delicado de todos porque
+      `backup_device()` devuelve un DataFrame de pandas, no JSON-safe
+      -- en `remote_agent.py`, la acción `backup` llama
+      `backup_device(session, device)` usando la SESIÓN PROPIA del
+      agente (mismo `DATABASE_URL` compartido, así que el dedup-insert
+      en `attendance_log` pasa igual que si fuera local) y serializa
+      con `raw.to_json(orient="records", date_format="iso")` ANTES de
+      devolverlo (evita que `json.dumps()` en `_process_one()` reviente
+      con un objeto `Timestamp` de pandas, que no es serializable por
+      default). Del lado de `webapp.py`, el resultado de
+      `run_device_op()` puede ser un DataFrame (local, directo de
+      `work()`) o un `dict` (remoto, con viaje de ida y vuelta por
+      JSON) -- se distinguen con `isinstance(raw, dict)` y se
+      reconstruye el DataFrame con `pd.DataFrame(raw["rows"])` solo en
+      ese caso (import de `pandas` diferido, DENTRO de la función --
+      `webapp.py` nunca lo necesitó a nivel de módulo hasta ahora). El
+      `log_event()` de auditoría de `device_backup` vivía DENTRO del
+      `work()` local -- que para el camino remoto nunca corre -- así
+      que se agregó un `_audit()` aparte en el route handler
+      específicamente para el caso `isinstance(raw, dict)`, con el
+      `new_count` que ahora devuelve el agente.
+    - **Probado de punta a punta contra el PISO2 real** (dos hilos en
+      el mismo proceso compartiendo una base SQLite temporal y
+      aislada, simulando central + agente remoto sin lanzar dos
+      procesos de SO de verdad -- mismo patrón de prueba que sesiones
+      anteriores): `ping`, `test`, `list_users` (148 usuarios reales),
+      `get_user` (uno existente y uno inexistente), y `backup` (36,494
+      marcaciones reales, CSV completo armado del lado central a partir
+      del JSON del agente) -- los cinco vía las rutas HTTP reales
+      (`app.test_client()` con una sesión de admin simulada), no solo
+      llamando las funciones sueltas. **Deliberadamente NO probadas
+      contra el equipo real**: `restart`, `poweroff`,
+      `clear_attendance`, `create_or_update_user`, `delete_user` --
+      todas destructivas/de escritura sobre un biométrico en uso
+      productivo real, fuera de los límites de esta sesión sin permiso
+      explícito y puntual del usuario (mismo principio que ya rige todo
+      este proyecto para producción). Quedan validadas por el mismo
+      patrón de código ya probado para las otras cinco, no por
+      ejecución real.
+    - **Candado (`device_lock.py`) del lado del agente, pendiente**: el
+      agente nunca lo adquiere para `restart`/`poweroff`/etc. (sí para
+      `backup`, indirectamente, porque `_pull_raw_with_retry` ya lo
+      hacía) -- mismo hueco que ya tenía `test` antes de esta sesión,
+      no una regresión nueva, pero vale la pena cerrarlo en algún
+      momento: si el agente corre una sync programada (`_run_sync`)
+      justo cuando llega un comando de `device_commands` para el MISMO
+      dispositivo, ambos podrían abrir una conexión ZK a la vez (el
+      reloj solo acepta una sesión viva).
+- **Página de estado del agente remoto** (`central/
+  remote_agent_status.py`, levantada desde
+  `central/remote_agent.py#_start_status_page()`): página de solo
+  lectura en la propia PC del agente (puerto `AGENT_STATUS_PORT`, 5050
+  por defecto) -- deliberadamente NO reusa ninguna plantilla ni lógica
+  de `central/webapp.py` (sería una segunda fuente de verdad del mismo
+  dato, con su propio login/roles/auditoría a mantener en paralelo, sin
+  necesidad real: el panel central YA muestra el estado de estos mismos
+  dispositivos, porque viven en la misma base compartida). Pensada para
+  alguien FÍSICAMENTE en esa sede (o en su LAN) que quiere confirmar
+  "¿el agente está vivo? ¿llega a la central? ¿ve mis biométricos ahora
+  mismo?" sin VPN ni PowerShell. Sin autenticación a propósito -- mismo
+  nivel de confianza que ya tiene esa red local con los biométricos
+  mismos, de solo lectura (ninguna acción destructiva ahí). Se levanta
+  en un hilo de fondo con `waitress.serve()` (mismo servidor WSGI que ya
+  usa el panel central nativo, ya en `requirements.txt`) desde
+  `remote_agent.py#main()`, sin bloquear el bucle principal de
+  sync/comandos. Cada carga de la página hace un chequeo TCP en vivo
+  (`check_network_reachable`, timeout de 2s) contra cada dispositivo de
+  ese agente -- no hace falta JavaScript ni un botón "probar": recargar
+  la página alcanza. `install_agente_remoto.ps1` pregunta el puerto
+  (vacío o "0" la desactiva), la guarda como `AGENT_STATUS_PORT` a nivel
+  de máquina, y abre el puerto en el Firewall de Windows si la consola
+  está elevada (mismo patrón que la regla de PostgreSQL de
+  `migrar_a_postgresql.ps1`). Probada de punta a punta contra el PISO2
+  real (fila "responde") y una IP inventada e inalcanzable (fila "no
+  responde", mensaje de timeout correcto) en la misma corrida.
 - **Instalador y scripts de gestión de Docker** (`deploy/docker/
   install.ps1`/`install.sh`, `manage.ps1`/`manage.sh`,
   `docker-compose.agent.yml`): un instalador interactivo que SIEMPRE
@@ -744,15 +857,17 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
     bien — un modelo grande como este tiene relaciones que se definen
     varias líneas después del último `Column`, fáciles de no ver en
     una lectura parcial.
-  - **Retrofit que falta** (mecánico, mismo patrón que "Probar
-    conexión", solo falta tiempo): Reiniciar, Apagar, Vaciar,
-    crear/editar/eliminar Usuarios del dispositivo -- cada uno necesita
-    (a) agregar la rama `action="..."` a su `run_device_op(...)` y (b)
-    agregar el branch correspondiente en `_run_action()` de
-    `central/remote_agent.py`. `device_sync`/`backup_device` NO pasan
-    por `run_device_op()` (usan `central.sync` directo), así que para
-    dispositivos remotos ya funcionan solos vía `sync_all(only_agent=...)`
-    -- no hay nada que retrofittear ahí.
+  - **Retrofit completado el 2026-10-21** -- ver el bullet "2026-10-21:
+    retrofit completo de todas las acciones" más arriba, en el bullet
+    de "Puente de administración remota", para el detalle. La nota
+    vieja de este punto decía que `backup_device`/`device_sync` "ya
+    funcionaban solos vía `sync_all(only_agent=...)` -- no hay nada que
+    retrofittear ahí" -- eso era CORRECTO solo para la sincronización
+    programada (`_run_sync` en `remote_agent.py`), pero INCORRECTO para
+    el botón manual "Descargar respaldo" (`device_backup` en
+    `webapp.py`), que es una ruta aparte y SÍ necesitaba el retrofit --
+    confundía dos usos distintos de `backup_device()`. Ya corregido en
+    código y en esta nota.
   - Migración de datos SQLite (producción Windows real) -> Postgres +
     reemplazar las migraciones `_migrate_add_*` a mano por Alembic:
     pedido por el usuario, **todavía no empezado**.
@@ -867,7 +982,25 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   caído). **Pendiente de confirmar**: que el usuario haya instalado
   Python real en esa PC remota y vuelto a correr el instalador con el
   fix -- recién ahí el agente de "sede-megaplaza" queda operativo de
-  verdad. **Sin commitear** (sin pedir commit todavía).
+  verdad. **Confirmado por el usuario**: el agente de "sede-megaplaza"
+  quedó instalado y corriendo (Tarea Programada activa), con sus dos
+  biométricos dados de alta en Dispositivos con "Agente remoto" =
+  `sede-megaplaza`.
+- **2026-10-21: retrofit completo del puente remoto + página de
+  estado** -- a pedido del usuario ("terminar la fase en la que se
+  puedan ya habilitar todas las funciones habilitadas en el biométrico
+  remoto" + "hay algún panel de aplicación web en el agente remoto").
+  Ver el detalle completo en los bullets correspondientes de
+  "Arquitectura y decisiones clave" arriba (`central/remote_agent.py`,
+  `central/webapp.py`, `central/remote_agent_status.py`). Ya NO queda
+  ninguna acción de dispositivo sin soportar el puente remoto. Probado
+  de punta a punta contra el PISO2 real para las acciones de solo
+  lectura (ping, test, list_users, get_user, backup de 36,494
+  marcaciones); las de escritura (restart/poweroff/clear_attendance/
+  create_or_update_user/delete_user) siguen el mismo patrón ya probado
+  pero no se ejecutaron contra el equipo real por estar en uso
+  productivo, sin permiso explícito para eso. **Sin commitear** (sin
+  pedir commit todavía).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

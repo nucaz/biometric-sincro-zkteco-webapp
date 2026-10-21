@@ -965,13 +965,28 @@ def device_backup(device_pk):
             db2.close()
 
     try:
-        raw = run_with_hard_timeout(work)
+        raw = run_device_op(device_pk, device_name, work, action="backup")
     except TimeoutError as e:
         flash(f"'{device_name}': {e}")
         return redirect(url_for("devices_status"))
     except Exception as e:
         flash(f"Error generando respaldo de '{device_name}': {e}")
         return redirect(url_for("devices_status"))
+
+    if isinstance(raw, dict):
+        # Vino de un agente remoto, con viaje de ida y vuelta por JSON --
+        # work() (que hace su propio log_event) nunca corrió ahí, así que
+        # se audita acá en su lugar.
+        import pandas as pd
+        rows, new_count = raw.get("rows") or [], raw.get("new_count", 0)
+        db3 = SessionLocal()
+        try:
+            log_event(db3, "device_backup", target=device_name,
+                      detail=f"{len(rows)} registro(s) en el equipo, {new_count} nuevo(s) guardado(s) en la base central", **ctx)
+            db3.commit()
+        finally:
+            db3.close()
+        raw = pd.DataFrame(rows)
 
     if raw is None or raw.empty:
         flash(f"'{device_name}' no tiene marcaciones guardadas en el equipo ahora mismo -- no hay nada que respaldar.")
@@ -1155,19 +1170,39 @@ def device_test(device_pk):
 def device_ping(device_pk):
     """Pure network-reachability test (TCP connect) -- no ZK handshake, no
     comm key involved. Faster and simpler than 'Probar conexión' when all
-    you want to know is "is it even on the network right now"."""
+    you want to know is "is it even on the network right now". Delegates
+    to the remote agent for a device with Device.agent_name set, same as
+    device_test -- a check from THIS process is only meaningful for a
+    local device (the IP is on the remote sede's own LAN otherwise,
+    never reachable from here)."""
     db = SessionLocal()
     try:
         device = db.get(Device, device_pk) or abort_404()
-        reachable, detail = check_network_reachable(device.ip, device.port)
-        _audit(db, "device_ping", target=device.name, detail="OK" if reachable else f"ERROR: {detail}")
-        if reachable:
-            flash(f"Ping OK: '{device.name}' ({device.ip}:{device.port}) responde en la red.")
-        else:
-            flash(f"Ping falló: '{device.name}' ({device.ip}:{device.port}) — {detail}")
-        return redirect(url_for("devices_status"))
+        device_name, device_ip, device_port = device.name, device.ip, device.port
     finally:
         db.close()
+
+    def work():
+        reachable, detail = check_network_reachable(device_ip, device_port)
+        return {"reachable": reachable, "detail": detail}
+
+    try:
+        result = run_device_op(device_pk, device_name, work, action="ping")
+    except Exception as e:
+        flash(f"'{device_name}': {e}")
+        return redirect(url_for("devices_status"))
+    reachable, detail = result["reachable"], result["detail"]
+
+    db = SessionLocal()
+    try:
+        _audit(db, "device_ping", target=device_name, detail="OK" if reachable else f"ERROR: {detail}")
+    finally:
+        db.close()
+    if reachable:
+        flash(f"Ping OK: '{device_name}' ({device_ip}:{device_port}) responde en la red.")
+    else:
+        flash(f"Ping falló: '{device_name}' ({device_ip}:{device_port}) — {detail}")
+    return redirect(url_for("devices_status"))
 
 
 @app.route("/devices/<int:device_pk>/restart", methods=["POST"])
@@ -1193,7 +1228,7 @@ def device_restart(device_pk):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_pk, device_name, work)
+            run_device_op(device_pk, device_name, work, action="restart")
             _audit(db, "device_restart", target=device_name)
             flash(f"Se envió el reinicio a '{device_name}'. Tardará unos segundos en volver a estar disponible.")
         except Exception as e:
@@ -1227,7 +1262,7 @@ def device_poweroff(device_pk):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_pk, device_name, work)
+            run_device_op(device_pk, device_name, work, action="poweroff")
             _audit(db, "device_poweroff", target=device_name)
             flash(f"Se envió el apagado a '{device_name}'. A diferencia de reiniciar, no volverá a encender solo.")
         except Exception as e:
@@ -1269,7 +1304,7 @@ def device_clear_attendance(device_pk):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_pk, device_name, work)
+            run_device_op(device_pk, device_name, work, action="clear_attendance")
             _audit(db, "device_clear_attendance", target=device_name,
                    detail="marcaciones borradas del equipo (el historial central se conserva)")
             flash(f"'{device_name}' vaciado: sus marcaciones se borraron del equipo. El historial ya sincronizado en el panel se conserva intacto.")
@@ -1320,7 +1355,7 @@ def device_users(device_pk):
             system.disconnect()
 
     try:
-        users = run_device_op(device_pk, device_name, work)
+        users = run_device_op(device_pk, device_name, work, action="list_users")
     except TimeoutError as e:
         flash(f"'{device_name}': {e}")
         return redirect(url_for("devices_status"))
@@ -1372,7 +1407,18 @@ def device_user_new(device_pk):
                     system.disconnect()
 
             try:
-                created = run_device_op(device_pk, device_name, work)
+                created = run_device_op(
+                    device_pk, device_name, work, action="create_or_update_user",
+                    params={
+                        # password: la cadena tal cual, SIN "or None" -- igual
+                        # que el work() local de arriba, '' significa "borrar
+                        # el PIN" (ver create_or_update_user en
+                        # attendance_system.py), None significaría otra cosa
+                        # ("dejar el que ya tenía").
+                        "user_id": user_id, "name": name, "privilege": privilege,
+                        "card": int(card) if card.isdigit() else 0, "password": device_password,
+                    },
+                )
             except Exception as e:
                 flash(f"Error escribiendo en el dispositivo: {e}")
                 return redirect(url_for("device_users", device_pk=device.id))
@@ -1432,7 +1478,13 @@ def device_user_edit(device_pk, user_id):
                     system.disconnect()
 
             try:
-                run_device_op(device_pk, device_name, work)
+                run_device_op(
+                    device_pk, device_name, work, action="create_or_update_user",
+                    params={
+                        "user_id": user_id, "name": name, "privilege": privilege,
+                        "card": int(card) if card.isdigit() else 0, "password": device_password,
+                    },
+                )
             except Exception as e:
                 flash(f"Error escribiendo en el dispositivo: {e}")
                 return redirect(url_for("device_users", device_pk=device.id))
@@ -1465,7 +1517,9 @@ def device_user_edit(device_pk, user_id):
                 system.disconnect()
 
         try:
-            live_user = run_device_op(device_pk, device_name, work)
+            live_user = run_device_op(
+                device_pk, device_name, work, action="get_user", params={"user_id": user_id},
+            )
         except Exception as e:
             flash(f"No se pudo conectar a '{device_name}' para leer los datos del usuario: {e}")
             return redirect(url_for("device_users", device_pk=device.id))
@@ -1504,7 +1558,9 @@ def device_user_delete(device_pk, user_id):
     db = SessionLocal()
     try:
         try:
-            run_device_op(device_pk, device_name, work)
+            run_device_op(
+                device_pk, device_name, work, action="delete_user", params={"user_id": user_id},
+            )
             _audit(db, "device_user_delete", target=f"{device_name}: {user_id}")
             flash(f"Usuario {user_id} eliminado de '{device_name}' (su historial de marcaciones se conserva).")
         except Exception as e:

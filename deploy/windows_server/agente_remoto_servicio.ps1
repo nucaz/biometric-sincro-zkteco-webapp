@@ -102,6 +102,12 @@ if ($Action -eq "Diagnose") {
     $EnvAgentName = [Environment]::GetEnvironmentVariable("AGENT_NAME", "Machine")
     Write-Host "--- Variables de entorno ---" -ForegroundColor Cyan
     Write-Host "AGENT_NAME: $(if ($EnvAgentName) { $EnvAgentName } else { '(no configurado)' })"
+    $EnvStatusPort = [Environment]::GetEnvironmentVariable("AGENT_STATUS_PORT", "Machine")
+    if ($EnvStatusPort -and $EnvStatusPort -ne "0") {
+        Write-Host "Página de estado: http://localhost:$EnvStatusPort"
+    } else {
+        Write-Host "Página de estado: desactivada"
+    }
     if ($EnvDatabaseUrl) {
         $masked = $EnvDatabaseUrl -replace '://([^:]+):([^@]+)@', '://$1:***@'
         Write-Host "DATABASE_URL: $masked"

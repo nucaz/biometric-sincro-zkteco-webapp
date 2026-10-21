@@ -12,6 +12,36 @@ para el procedimiento completo de release.
 ## [Unreleased]
 
 ### Agregado
+- **Puente remoto completo: todas las acciones de dispositivo ya
+  funcionan contra un biométrico de agente remoto** (`central/
+  remote_agent.py`, `central/webapp.py`): hasta ahora solo "Probar
+  conexión" pasaba por el puente -- Reiniciar, Apagar, Vaciar
+  dispositivo, Ping, Descargar respaldo, y la gestión completa de
+  Usuarios del dispositivo (listar, crear, editar, eliminar) ya
+  funcionan igual para un dispositivo local o de sede remota, sin que
+  el usuario note la diferencia. "Descargar respaldo" fue el más
+  delicado: antes no pasaba por el mecanismo del puente en absoluto, y
+  ahora viaja como una lista de filas por JSON desde el agente,
+  reconstruida en un DataFrame del lado central para armar el mismo CSV
+  de siempre. Probado de punta a punta contra el PISO2 real (acciones
+  de solo lectura: ping, probar conexión, listar usuarios, un respaldo
+  completo de 36,494 marcaciones) -- las acciones de escritura
+  (reiniciar/apagar/vaciar/crear-editar-eliminar usuario) siguen el
+  mismo patrón exacto ya probado, pero no se ejecutaron contra el
+  equipo real por estar en uso productivo.
+- **Página de estado del agente remoto** (`central/
+  remote_agent_status.py`): una página web liviana y de solo lectura
+  que corre en la propia PC del agente (puerto 5050 por defecto,
+  configurable al instalar), para confirmar desde esa sede -- sin
+  PowerShell ni VPN hacia la central -- que el agente está vivo, que
+  llega a la base central, y qué tan accesibles están sus biométricos
+  en este momento. Deliberadamente NO es una copia del panel central
+  (eso duplicaría login/roles/auditoría y generaría confusión sobre
+  cuál es la fuente de verdad) -- es una sola página sin autenticación,
+  pensada para la misma confianza que ya tiene esa red local con los
+  biométricos. `install_agente_remoto.ps1` la levanta sola (vía
+  `waitress`, mismo servidor que ya usa el panel central) y abre el
+  puerto en el Firewall de Windows si corre elevado.
 - **Migración a PostgreSQL nativa, sin Docker**
   (`deploy/windows_server/migrar_a_postgresql.ps1`): para cuando el
   servidor central tampoco tiene virtualización disponible (ej. es una

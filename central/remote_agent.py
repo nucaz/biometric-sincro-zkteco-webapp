@@ -26,11 +26,7 @@ hole for:
 
    ACTIONS below must stay in sync with webapp.py: every route that
    retrofits a new `action=` for run_device_op() needs the matching
-   branch added here too. As of this writing only "test" (Probar
-   conexión) is wired up end to end on both sides -- the others
-   (restart/poweroff/clear_attendance/device user management) are NOT
-   yet retrofitted in webapp.py, so a remote device can't use them until
-   that's done; see CLAUDE.md for the status of that follow-up work.
+   branch added here too.
 
 Run with:
     AGENT_NAME=sede-remota-1 DATABASE_URL=postgresql+psycopg2://... python -m central.remote_agent
@@ -38,6 +34,7 @@ Run with:
 import json
 import os
 import sys
+import threading
 import time
 from datetime import datetime
 
@@ -45,16 +42,16 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from attendance_system import ZKTecoAttendance  # noqa: E402
+from attendance_system import ZKTecoAttendance, check_network_reachable  # noqa: E402
 from central.db import SessionLocal, init_db  # noqa: E402
 from central.models import Device, DeviceCommand  # noqa: E402
-from central.sync import sync_all  # noqa: E402
+from central.sync import sync_all, backup_device  # noqa: E402
 from central.sync_loop import _seconds_until  # noqa: E402
 
 COMMAND_POLL_SECONDS = 5
 
 
-def _run_action(device, action, params):
+def _run_action(session, device, action, params):
     """Mirrors the closures central/webapp.py's run_device_op() callers
     build in-process (device_test's `work()`, etc.) -- same
     ZKTecoAttendance calls, dispatched by name instead of being a literal
@@ -62,7 +59,28 @@ def _run_action(device, action, params):
     Returning None (not raising) for "reached the device but the ZK
     handshake itself was rejected" matches device_test's local `work()`
     exactly, so webapp.py's existing `if result is None:` branch (comm
-    key hint, etc.) behaves identically for a local or a remote device."""
+    key hint, etc.) behaves identically for a local or a remote device.
+
+    `session` is this agent's own open SessionLocal (same shared
+    DATABASE_URL as the central app) -- only "backup" needs it, to reuse
+    central.sync.backup_device() exactly as webapp.py's local path would
+    (same dedup-insert into the shared attendance_log)."""
+    if action == "ping":
+        # Pure TCP reachability -- no ZK handshake, mirrors device_ping's
+        # local check_network_reachable() call. Doesn't open a pyzk
+        # connection at all, so it's handled before the connect() below.
+        reachable, detail = check_network_reachable(device.ip, device.port)
+        return {"reachable": reachable, "detail": detail}
+
+    if action == "backup":
+        # backup_device() manages its OWN connection, retries and device
+        # lock (central/sync.py's _pull_raw_with_retry) -- same function
+        # webapp.py's local path calls directly, so it's dispatched here
+        # before the generic system.connect() below, not through it.
+        raw, new_count = backup_device(session, device)
+        rows = [] if raw is None else json.loads(raw.to_json(orient="records", date_format="iso"))
+        return {"rows": rows, "new_count": new_count}
+
     system = ZKTecoAttendance(device.ip, port=device.port, password=device.comm_password or 0)
     system.connect()
     if not system.conn:
@@ -73,6 +91,29 @@ def _run_action(device, action, params):
                 "model": system.device_info.get("model", "").strip(),
                 "serial": system.device_info.get("serial_number", "").strip(),
             }
+        if action == "restart":
+            system.restart_device()
+            return None
+        if action == "poweroff":
+            system.poweroff_device()
+            return None
+        if action == "clear_attendance":
+            system.clear_attendance_log()
+            return None
+        if action == "list_users":
+            return system.list_device_users()
+        if action == "get_user":
+            user_id = str(params["user_id"])
+            return next((u for u in system.list_device_users() if str(u["user_id"]) == user_id), None)
+        if action == "create_or_update_user":
+            return system.create_or_update_user(
+                user_id=params["user_id"], name=params["name"],
+                privilege=params.get("privilege", 0),
+                card=params.get("card", 0), password=params.get("password"),
+            )
+        if action == "delete_user":
+            system.delete_device_user(params["user_id"])
+            return None
         raise ValueError(f"Acción desconocida para el agente remoto: '{action}'.")
     finally:
         system.disconnect()
@@ -86,7 +127,7 @@ def _process_one(session, cmd):
         if not device:
             raise RuntimeError(f"device_pk={cmd.device_pk} ya no existe.")
         params = json.loads(cmd.params) if cmd.params else {}
-        result = _run_action(device, cmd.action, params)
+        result = _run_action(session, device, cmd.action, params)
         cmd.status = "done"
         cmd.result = json.dumps(result)
     except Exception as e:
@@ -122,12 +163,35 @@ def _run_sync(agent_name):
         print(f"[remote_agent] sync {name}: {result}", flush=True)
 
 
+def _start_status_page(agent_name):
+    """Página de estado de solo lectura en un hilo de fondo -- ver
+    central/remote_agent_status.py para qué muestra y por qué es una
+    página propia en vez de reusar central/webapp.py. AGENT_STATUS_PORT
+    (default 5050, deliberadamente distinto del 5000 del panel central
+    por si alguna vez conviven en la misma máquina) -- poner en "" o "0"
+    la desactiva por completo."""
+    port_raw = os.environ.get("AGENT_STATUS_PORT", "5050")
+    if not port_raw or port_raw == "0":
+        return
+    port = int(port_raw)
+
+    def run():
+        import waitress
+        from central import remote_agent_status
+        remote_agent_status.app.config["AGENT_NAME"] = agent_name
+        print(f"[remote_agent] página de estado en http://0.0.0.0:{port}", flush=True)
+        waitress.serve(remote_agent_status.app, host="0.0.0.0", port=port, threads=4)
+
+    threading.Thread(target=run, daemon=True).start()
+
+
 def main():
     agent_name = os.environ.get("AGENT_NAME")
     if not agent_name:
         print("Falta la variable de entorno AGENT_NAME.", file=sys.stderr)
         sys.exit(1)
     init_db()
+    _start_status_page(agent_name)
 
     interval_raw = os.environ.get("SYNC_INTERVAL_MINUTES")
     daily_at = os.environ.get("SYNC_DAILY_AT") or ("" if interval_raw else "23:00")

@@ -108,6 +108,12 @@ Write-Host ""
 Write-Host "--- Sincronización automática de los biométricos de esta sede ---" -ForegroundColor Cyan
 $SyncDailyAt = Read-WithDefault "Hora diaria de sincronización (HH:mm)" "23:00"
 
+Write-Host ""
+Write-Host "--- Página de estado local (opcional) ---" -ForegroundColor Cyan
+Write-Host "Una página de solo lectura en esta misma PC para confirmar que el agente" -ForegroundColor DarkGray
+Write-Host "está vivo y si llega a los biométricos de esta sede, sin PowerShell ni VPN." -ForegroundColor DarkGray
+$AgentStatusPort = Read-WithDefault "Puerto para la página de estado (vacío o 0 para desactivarla)" "5050"
+
 $DatabaseUrl = "postgresql+psycopg2://${CentralUser}:${CentralPassword}@${CentralHost}:${CentralPort}/${CentralDb}"
 
 $SourceDir = Resolve-Path (Join-Path $PSScriptRoot "..\..")
@@ -149,6 +155,7 @@ if ($IsAdmin) {
         [Environment]::SetEnvironmentVariable("AGENT_NAME", $AgentName, "Machine")
         [Environment]::SetEnvironmentVariable("DATABASE_URL", $DatabaseUrl, "Machine")
         [Environment]::SetEnvironmentVariable("SYNC_DAILY_AT", $SyncDailyAt, "Machine")
+        [Environment]::SetEnvironmentVariable("AGENT_STATUS_PORT", $AgentStatusPort, "Machine")
         Write-Host "Variables de entorno configuradas a nivel de máquina." -ForegroundColor Cyan
     } catch {
         Write-Warning "No se pudieron guardar las variables de entorno a nivel de máquina: $($_.Exception.Message)"
@@ -172,6 +179,7 @@ $LogLines = @(
     "Usuario base de datos central: $CentralUser"
     "Contraseña base de datos central: $CentralPassword"
     "Hora de sincronización diaria: $SyncDailyAt"
+    "Puerto de la página de estado: $(if ($AgentStatusPort -and $AgentStatusPort -ne '0') { $AgentStatusPort } else { '(desactivada)' })"
     "Carpeta de instalación: $InstallDir"
 )
 Set-Content -Path $LogPath -Value $LogLines -Encoding UTF8
@@ -199,8 +207,24 @@ Register-ScheduledTask -TaskName "AsistenciaAgenteRemoto" -Action $AgentAction -
 Write-Host "Iniciando el agente..." -ForegroundColor Cyan
 Start-ScheduledTask -TaskName "AsistenciaAgenteRemoto"
 
+if ($AgentStatusPort -and $AgentStatusPort -ne "0") {
+    Write-Host "`nAbriendo el puerto $AgentStatusPort en el Firewall de Windows (página de estado)..." -ForegroundColor Cyan
+    $FirewallRuleName = "Asistencia - Agente remoto (página de estado)"
+    try {
+        if (-not (Get-NetFirewallRule -DisplayName $FirewallRuleName -ErrorAction SilentlyContinue)) {
+            New-NetFirewallRule -DisplayName $FirewallRuleName -Direction Inbound -Protocol TCP -LocalPort $AgentStatusPort -Action Allow | Out-Null
+        }
+        Write-Host "Regla de Firewall lista." -ForegroundColor Green
+    } catch {
+        Write-Warning "No se pudo crear la regla de Firewall automáticamente: $($_.Exception.Message)"
+    }
+}
+
 Write-Host "`n=== Listo ===" -ForegroundColor Green
 Write-Host "El agente '$AgentName' está corriendo como Tarea Programada." -ForegroundColor Green
+if ($AgentStatusPort -and $AgentStatusPort -ne "0") {
+    Write-Host "Página de estado (en esta red local): http://localhost:$AgentStatusPort" -ForegroundColor Green
+}
 Write-Host "Resumen con los datos ingresados: $LogPath" -ForegroundColor Green
 Write-Host "`nRecordá: en el panel central, editá cada dispositivo de esta sede" -ForegroundColor Yellow
 Write-Host "y poné '$AgentName' en el campo 'Agente remoto'." -ForegroundColor Yellow
