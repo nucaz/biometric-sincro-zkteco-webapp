@@ -11,6 +11,21 @@ para el procedimiento completo de release.
 
 ## [Unreleased]
 
+### Corregido
+- **La página de estado del agente remoto podía fallar al arrancar sin
+  dejar ningún rastro** -- corre en un hilo de fondo dentro de una Tarea
+  Programada sin consola visible, así que si `waitress.serve()` fallaba
+  (puerto ocupado por otro programa, o dentro de un rango que Windows
+  reserva para otra cosa -- `netsh interface ipv4 show
+  excludedportrange protocol=tcp`), el hilo se moría en silencio y la
+  página nunca contestaba, sin ningún mensaje de por qué. Reportado por
+  el usuario (`http://localhost:5050` daba "conexión rechazada" después
+  de una instalación que había dicho "Listo"). Corregido: cualquier
+  excepción al arrancar ahora se guarda en
+  `<carpeta de instalación>\pagina_estado_error.log`. Verificado
+  forzando una falla real (puerto ya ocupado) y confirmando que el
+  error completo queda en el archivo.
+
 ### Agregado
 - **Puente remoto completo: todas las acciones de dispositivo ya
   funcionan contra un biométrico de agente remoto** (`central/

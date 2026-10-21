@@ -427,6 +427,27 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   `migrar_a_postgresql.ps1`). Probada de punta a punta contra el PISO2
   real (fila "responde") y una IP inventada e inalcanzable (fila "no
   responde", mensaje de timeout correcto) en la misma corrida.
+  - **Bug real #1 de esta página, reportado por el usuario en su
+    primera instalación real**: la página nunca arrancó
+    (`http://localhost:5050` daba "conexión rechazada") después de una
+    instalación que terminó con "=== Listo ===" -- el hilo de fondo que
+    corre `waitress.serve()` no tenía manejo de excepciones, así que si
+    fallaba al arrancar (puerto ya ocupado por otro programa, o dentro
+    de un rango que Windows reserva para otra cosa -- verificable con
+    `netsh interface ipv4 show excludedportrange protocol=tcp`), el
+    hilo se moría en silencio: una Tarea Programada (SYSTEM) no tiene
+    consola visible, así que ni siquiera el `print()` de error quedaba
+    en ningún lado. Corregido envolviendo todo el arranque en
+    `try/except` que escribe el traceback completo en
+    `<InstallDir>\pagina_estado_error.log`. Verificado forzando una
+    falla real (ocupando el puerto con otro socket antes de arrancar) y
+    confirmando que el archivo de log queda con el error completo --
+    en esta prueba salió `PermissionError: [WinError 10013]`, no el
+    "address already in use" más esperable, confirmando que Windows
+    puede devolver ese error tanto por un puerto ya ocupado como por
+    uno fuera de rango permitido -- motivo más para loguear el
+    traceback completo en vez de intentar adivinar la causa por el tipo
+    de excepción.
 - **Instalador y scripts de gestión de Docker** (`deploy/docker/
   install.ps1`/`install.sh`, `manage.ps1`/`manage.sh`,
   `docker-compose.agent.yml`): un instalador interactivo que SIEMPRE
@@ -999,8 +1020,26 @@ Repo: `github.com/nucaz/biometric-sincro-zkteco-webapp.git`, rama
   marcaciones); las de escritura (restart/poweroff/clear_attendance/
   create_or_update_user/delete_user) siguen el mismo patrón ya probado
   pero no se ejecutaron contra el equipo real por estar en uso
-  productivo, sin permiso explícito para eso. **Sin commitear** (sin
-  pedir commit todavía).
+  productivo, sin permiso explícito para eso. Commiteado y pusheado a
+  `origin/main` (`5b7a362`).
+- **2026-10-21: la página de estado no arrancaba en la instalación real
+  del usuario** (`http://localhost:5050` -- "conexión rechazada"
+  después de un "=== Listo ===") y el panel central seguía fallando al
+  hacer Ping/Probar conexión contra `Megaplaza-Ingreso`
+  (`192.168.1.96`). El campo "Agente remoto" del dispositivo SÍ
+  coincide exacto con el agente (confirmado por el usuario) -- así que
+  el comando llega al agente, pero el chequeo de red desde la propia PC
+  del agente hacia `192.168.1.96:4370` está fallando de verdad (no es
+  un bug de ruteo del puente). Corregido el problema de la página de
+  estado (ver el bullet correspondiente en "Arquitectura y decisiones
+  clave" arriba -- faltaba manejo de errores, ahora escribe
+  `pagina_estado_error.log`). **Pendiente de confirmar por el usuario**:
+  (a) si la PC donde está instalado el agente está en la misma red
+  (192.168.1.x) que el biométrico `Megaplaza-Ingreso`, o si el software
+  ZKTeco de escritorio que SÍ se conectó corre en una PC distinta de esa
+  sede; (b) si 5050 cae en un rango de puertos excluido de Windows
+  (`netsh interface ipv4 show excludedportrange protocol=tcp`) en esa
+  máquina real. **Sin commitear** (sin pedir commit todavía).
 - **Biométrico nuevo evaluado**: manual revisado (ZKTeco Green Label
   G3, reconocimiento facial/vascular) -- usa el mismo protocolo que ya
   soporta la app: puerto TCP 4370 por defecto, Clave de Comunicación,

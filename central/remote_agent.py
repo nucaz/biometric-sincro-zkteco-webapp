@@ -176,11 +176,26 @@ def _start_status_page(agent_name):
     port = int(port_raw)
 
     def run():
-        import waitress
-        from central import remote_agent_status
-        remote_agent_status.app.config["AGENT_NAME"] = agent_name
-        print(f"[remote_agent] página de estado en http://0.0.0.0:{port}", flush=True)
-        waitress.serve(remote_agent_status.app, host="0.0.0.0", port=port, threads=4)
+        # Esto corre en una Tarea Programada (SYSTEM, sin consola
+        # visible) -- si algo acá adentro revienta, un hilo normal se
+        # muere en silencio y nadie se entera (pasó de verdad en esta
+        # sesión: la página nunca arrancó y no quedó ningún rastro de
+        # por qué). Por eso cualquier excepción se guarda en un archivo
+        # junto a la instalación, no solo se imprime a un stdout que
+        # nadie lee.
+        try:
+            import waitress
+            from central import remote_agent_status
+            remote_agent_status.app.config["AGENT_NAME"] = agent_name
+            print(f"[remote_agent] página de estado en http://0.0.0.0:{port}", flush=True)
+            waitress.serve(remote_agent_status.app, host="0.0.0.0", port=port, threads=4)
+        except Exception:
+            import traceback
+            error_path = os.path.join(PROJECT_ROOT, "pagina_estado_error.log")
+            with open(error_path, "a", encoding="utf-8") as f:
+                f.write(f"\n--- {datetime.now().isoformat(timespec='seconds')} ---\n")
+                f.write(traceback.format_exc())
+            print(f"[remote_agent] la página de estado no pudo arrancar -- ver {error_path}", flush=True)
 
     threading.Thread(target=run, daemon=True).start()
 
